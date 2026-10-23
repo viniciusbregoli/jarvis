@@ -21,7 +21,7 @@ PROMPT = """You are Jarvis, a voice assistant running on Vinicius's Mac, in the 
 
 # The agent's config lives here and is pushed on every start, so the dashboard never drifts from the code.
 CONFIG = {
-    "realtime_model": "eleven_realtime_v1_mini",
+    "realtime_model": "eleven_realtime_v1_max",  # Mini sometimes narrated tool calls without making them
     "agent": {
         "first_message": "Pois não, senhor?",
         "language": "pt",

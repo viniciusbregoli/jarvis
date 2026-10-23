@@ -13,7 +13,7 @@ uv sync
 uv run python -m jarvis
 ```
 
-Jarvis lives in the menu bar as a HAL 9000 eye that doubles as a status light: grey when it isn't listening (starting or retrying after an error), dim red while waiting for "Hey Jarvis", bright red during a conversation. Its menu shows what it's doing ("Listening for “Hey Jarvis”", "In conversation", or an error it's retrying), **Talk now** to start a conversation without the wake word, **Microphone** to pick which mic Jarvis listens on (remembered in `~/.config/jarvis/mic`), and **Quit Jarvis**.
+Jarvis lives in the menu bar as a HAL 9000 eye that doubles as a status light: grey when it isn't listening (starting or retrying after an error), dim red while waiting for "Hey Jarvis", bright red during a conversation. Its menu shows what it's doing ("Listening for “Hey Jarvis”", "In conversation", or an error it's retrying), **Talk now** to start a conversation without the wake word, **Microphone** to switch the Mac's input device (other apps follow, as when you change it in System Settings; Jarvis always listens on the system input), and **Quit Jarvis**.
 
 ## What it can do
 

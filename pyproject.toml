@@ -5,6 +5,8 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "elevenlabs",
     "openwakeword",
+    "pyobjc-framework-avfoundation>=12.2.2",
+    "pyobjc-framework-quartz>=12.2.2",
     "rumps>=0.4.0",
     "sounddevice",
 ]

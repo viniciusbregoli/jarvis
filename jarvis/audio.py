@@ -15,10 +15,14 @@ WAKE_THRESHOLD = 0.5
 class SoundDeviceAudio(AudioInterface):
     """Same job as the SDK's DefaultAudioInterface, which needs PyAudio (it doesn't build on this Mac)."""
 
+    def __init__(self):
+        # Set here, not in start(): the SDK calls start() from its own thread after connecting, and the idle timer
+        # may read this first.
+        self.last_played = time.monotonic()
+
     def start(self, input_callback):
         self.pending = queue.Queue()
         self.stopping = threading.Event()
-        self.last_played = time.monotonic()
         self.mic = sd.RawInputStream(
             samplerate=RATE,
             channels=1,

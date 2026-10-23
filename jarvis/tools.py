@@ -78,9 +78,10 @@ def media(params: dict) -> str:
 
 
 def set_timer(params: dict) -> str:
-    seconds, label = int(params["seconds"]), params.get("label") or "Timer"
+    seconds, label = int(params["seconds"]), params.get("label")
     # shortcut: timers live in memory and are lost if Jarvis quits; use reminders for anything that must survive.
-    timer = threading.Timer(seconds, announce, [f"{label} is done."])
+    message = f"Senhor, o timer do {label} terminou." if label else "Senhor, o timer terminou."
+    timer = threading.Timer(seconds, announce, [message])
     timer.daemon = True  # a pending timer must not keep Jarvis from quitting
     timer.start()
     return f"Timer set for {seconds} seconds"
@@ -179,7 +180,7 @@ SPECS = [
             "type": "object",
             "properties": {
                 "seconds": {"type": "integer", "description": "Duration in seconds"},
-                "label": string("Short name for the timer, e.g. 'Pasta'"),
+                "label": string("What the timer is for, in Portuguese, e.g. 'macarrão'"),
             },
             "required": ["seconds"],
         },

@@ -10,7 +10,7 @@ from elevenlabs.conversational_ai.conversation import Conversation
 from openwakeword.model import Model
 
 from .agent import api_key, ensure_agent
-from .audio import SoundDeviceAudio, input_mics, wait_for_wake_word
+from .audio import SoundDeviceAudio, input_mics, refresh_devices, wait_for_wake_word
 
 IDLE_SECONDS = 12  # silence after Jarvis stops talking before the session closes (sessions bill per minute)
 RETRY_SECONDS = 10
@@ -55,13 +55,11 @@ class JarvisApp(rumps.App):
         self.interrupt = threading.Event()
         self.talk_requested = False
         self.mic = MIC_FILE.read_text().strip() or None if MIC_FILE.exists() else None
-        # shortcut: PortAudio lists devices once at startup, so a mic plugged in later needs a restart to show up.
+        # Filled by the voice thread after each device refresh; the main thread only reads them.
+        self.mics, self.default_mic, self.shown_mics = [], "", None
         self.mic_menu = rumps.MenuItem("Microphone")
-        for name in [None, *input_mics()]:
-            self.mic_menu.add(rumps.MenuItem(name or "System default", callback=self.pick_mic))
         self.client = ElevenLabs(api_key=api_key())  # exits here, on the main thread, when the key is missing
         self.menu = [self.status_item, rumps.MenuItem("Talk now", callback=self.talk_now), self.mic_menu]
-        self.show_mic()
         threading.Thread(target=self.voice_loop, daemon=True).start()
 
     # AppKit must only be touched from the main thread, so the voice thread just sets self.status.
@@ -70,6 +68,13 @@ class JarvisApp(rumps.App):
         icon, self.status_item.title = self.status
         if icon != self.shown_icon:
             self.icon, self.shown_icon = ICONS[icon], icon
+        if self.mics != self.shown_mics:
+            for title in list(self.mic_menu.keys()):  # rumps clear() fails on a submenu that was never filled
+                del self.mic_menu[title]
+            for name in [None, *self.mics]:
+                self.mic_menu.add(rumps.MenuItem(name or "System default", callback=self.pick_mic))
+            self.shown_mics = self.mics
+        self.show_mic()
 
     def talk_now(self, _):
         self.talk_requested = True
@@ -83,7 +88,8 @@ class JarvisApp(rumps.App):
         self.interrupt.set()  # reopen the wake word stream on the new mic; a conversation in progress keeps its mic
 
     def show_mic(self):
-        self.mic_menu.title = f"Microphone: {self.mic or sd.query_devices(kind='input')['name']}"
+        in_use = self.mic if self.mic in self.mics else self.default_mic  # a saved mic that's unplugged falls back
+        self.mic_menu.title = f"Microphone: {in_use}"
         for item in self.mic_menu.values():
             item.state = item.title == (self.mic or "System default")
 
@@ -93,6 +99,8 @@ class JarvisApp(rumps.App):
         while True:
             try:
                 agent_id = agent_id or ensure_agent(self.client)
+                refresh_devices()
+                self.mics, self.default_mic = input_mics(), sd.query_devices(kind="input")["name"]
                 self.status = ("listening", "Listening for “Hey Jarvis”")
                 heard = wait_for_wake_word(model, self.mic, self.interrupt)
                 self.interrupt.clear()

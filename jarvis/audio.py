@@ -10,6 +10,7 @@ from openwakeword.model import Model
 RATE = 16000  # ElevenAgents and openWakeWord both expect 16 kHz mono int16
 WAKE_FRAME = 1280  # 80 ms, openWakeWord's native chunk
 WAKE_THRESHOLD = 0.5
+DEVICE_RECHECK_SECONDS = 10
 
 
 class SoundDeviceAudio(AudioInterface):
@@ -85,11 +86,19 @@ def input_device(mic: str | None) -> int | None:
     return next((i for i, d in enumerate(sd.query_devices()) if d["name"] == mic and d["max_input_channels"]), None)
 
 
+def refresh_devices():
+    """PortAudio reads the device list once; re-read it so a plugged or unplugged headset is picked up."""
+    sd._terminate()
+    sd._initialize()
+
+
 def wait_for_wake_word(model: Model, mic: str | None, interrupt: threading.Event) -> bool:
-    """True when "Hey Jarvis" is heard, False when `interrupt` is set (Talk now, or a mic change)."""
+    """True when "Hey Jarvis" is heard. False when `interrupt` is set (Talk now, or a mic change) or after
+    DEVICE_RECHECK_SECONDS, so the caller can refresh the device list while no stream is open."""
     stream = sd.InputStream(device=input_device(mic), samplerate=RATE, channels=1, dtype="int16", blocksize=WAKE_FRAME)
+    deadline = time.monotonic() + DEVICE_RECHECK_SECONDS
     with stream:
-        while not interrupt.is_set():
+        while not interrupt.is_set() and time.monotonic() < deadline:
             frame, _ = stream.read(WAKE_FRAME)
             if heard_wake_word(model, frame[:, 0]):
                 model.reset()

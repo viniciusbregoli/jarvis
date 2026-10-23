@@ -11,7 +11,7 @@ from elevenlabs.conversational_ai.conversation import ClientTools, Conversation,
 from openwakeword.model import Model
 
 from .agent import api_key, ensure_agent
-from .audio import SoundDeviceAudio, input_mics, refresh_devices, wait_for_wake_word
+from .audio import VoiceProcessingAudio, input_mics, refresh_devices, wait_for_wake_word
 from .tools import SPECS
 
 IDLE_SECONDS = 12  # silence after Jarvis stops talking before the session closes (sessions bill per minute)
@@ -23,7 +23,7 @@ ICONS = {state: str(ASSETS / f"menubar-{state}.png") for state in ("idle", "list
 
 
 def converse(client: ElevenLabs, agent_id: str, mic: str | None):
-    audio = SoundDeviceAudio(mic)
+    audio = VoiceProcessingAudio(mic)
     ended = threading.Event()
     last_user = time.monotonic()
 

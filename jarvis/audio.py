@@ -1,74 +1,108 @@
-import queue
 import threading
 import time
 
+import AVFoundation as AV
 import numpy as np
 import sounddevice as sd
 from elevenlabs.conversational_ai.conversation import AudioInterface
 from openwakeword.model import Model
 
-RATE = 16000  # ElevenAgents and openWakeWord both expect 16 kHz mono int16
+from . import coreaudio
+
+RATE = 16000  # mic audio for ElevenAgents and openWakeWord: 16 kHz mono int16
+OUTPUT_RATE = 44100  # what the agent sends back (agent_output_audio_format pcm_44100)
 WAKE_FRAME = 1280  # 80 ms, openWakeWord's native chunk
 WAKE_THRESHOLD = 0.5
 DEVICE_RECHECK_SECONDS = 10
 
 
-class SoundDeviceAudio(AudioInterface):
-    """Same job as the SDK's DefaultAudioInterface, which needs PyAudio (it doesn't build on this Mac)."""
+class VoiceProcessingAudio(AudioInterface):
+    """Conversation audio through Apple's voice processing (the echo cancellation FaceTime uses), so Jarvis
+    doesn't hear itself on the laptop speakers and you can still talk over it."""
 
     def __init__(self, mic: str | None = None):
-        self.device = input_device(mic)
+        self.mic = mic
+        self.pending = 0  # buffers scheduled but not yet played
         # Set here, not in start(): the SDK calls start() from its own thread after connecting, and the idle timer
         # may read this first.
         self.last_played = time.monotonic()
 
     def start(self, input_callback):
-        self.pending = queue.Queue()
-        self.stopping = threading.Event()
-        self.mic = sd.RawInputStream(
-            device=self.device,
-            samplerate=RATE,
-            channels=1,
-            dtype="int16",
-            blocksize=4000,
-            callback=lambda data, *_: input_callback(bytes(data)),
-        )
-        self.speaker = sd.RawOutputStream(samplerate=RATE, channels=1, dtype="int16")
-        self.mic.start()
-        self.speaker.start()
-        self.player = threading.Thread(target=self._play, daemon=True)
-        self.player.start()
+        self.engine = AV.AVAudioEngine.new()
+        mic = self.engine.inputNode()
+        self.engine.outputNode(), self.engine.mainMixerNode()  # must exist before voice processing, or start fails
+        mic.setVoiceProcessingEnabled_error_(True, None)
+        if (device := coreaudio_device_id(self.mic)) is not None:
+            mic.AUAudioUnit().setDeviceID_error_(device, None)
+        # Voice processing reconfigures the input from 5 to 7 channels a moment after it's enabled; a graph built
+        # before that never receives audio.
+        deadline = time.monotonic() + 3
+        while mic.inputFormatForBus_(0).channelCount() == 5 and time.monotonic() < deadline:
+            time.sleep(0.05)
 
-    def _play(self):
-        while not self.stopping.is_set():
-            try:
-                self.speaker.write(self.pending.get(timeout=0.25))
-                self.last_played = time.monotonic()
-            except queue.Empty:
-                pass
+        self.player = AV.AVAudioPlayerNode.new()
+        self.engine.attachNode_(self.player)
+        self.out_format = AV.AVAudioFormat.alloc().initStandardFormatWithSampleRate_channels_(OUTPUT_RATE, 1)
+        self.engine.connect_to_format_(self.player, self.engine.mainMixerNode(), self.out_format)
+
+        def tap(buffer, _when):
+            frames = buffer.frameLength()
+            # Channel 0 is the echo-cancelled voice; the others are raw mic channels.
+            voice = np.frombuffer(buffer.floatChannelData()[0].as_buffer(frames), dtype=np.float32)
+            input_callback(to_pcm16(voice, buffer.format().sampleRate()))
+
+        mic.installTapOnBus_bufferSize_format_block_(0, 4096, None, tap)
+        self.engine.prepare()
+        ok, error = self.engine.startAndReturnError_(None)
+        if not ok:
+            raise RuntimeError(f"Couldn't start voice processing: {error}")
+        self.player.play()
 
     def stop(self):
-        if self.stopping.is_set():
+        if not getattr(self, "engine", None):
             return
-        self.mic.stop()
-        self.mic.close()
         # Let the sign-off finish before cutting the speaker.
         deadline = time.monotonic() + 5
-        while not self.pending.empty() and time.monotonic() < deadline:
+        while self.pending and time.monotonic() < deadline:
             time.sleep(0.1)
-        self.stopping.set()
-        self.player.join()
-        self.speaker.close()
+        self.engine.inputNode().removeTapOnBus_(0)
+        self.engine.stop()
+        self.engine.inputNode().setVoiceProcessingEnabled_error_(False, None)
+        self.engine = None
 
     def output(self, audio: bytes):
-        self.pending.put(audio)
+        samples = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768
+        buffer = AV.AVAudioPCMBuffer.alloc().initWithPCMFormat_frameCapacity_(self.out_format, len(samples))
+        buffer.setFrameLength_(len(samples))
+        np.frombuffer(buffer.floatChannelData()[0].as_buffer(len(samples)), dtype=np.float32)[:] = samples
+        self.pending += 1
+        self.player.scheduleBuffer_completionHandler_(buffer, self._played)
+
+    def _played(self):
+        self.pending -= 1
+        self.last_played = time.monotonic()
 
     def interrupt(self):
-        while True:
-            try:
-                self.pending.get_nowait()
-            except queue.Empty:
-                return
+        # stop() drops everything scheduled (firing each completion handler); play() readies it for new audio.
+        self.player.stop()
+        self.player.play()
+
+
+def to_pcm16(samples: np.ndarray, rate: float) -> bytes:
+    """Float samples at the mic's rate to 16 kHz int16, what ElevenAgents expects."""
+    count = int(len(samples) * RATE / rate)
+    resampled = np.interp(np.linspace(0, len(samples) - 1, count), np.arange(len(samples)), samples)
+    return (np.clip(resampled, -1, 1) * 32767).astype(np.int16).tobytes()
+
+
+def coreaudio_device_id(name: str | None) -> int | None:
+    """CoreAudio's id for a device name (what voice processing needs to use a specific mic); None if not found."""
+    if not name:
+        return None
+    for device in coreaudio.devices():
+        if coreaudio.name(device) == name:
+            return device
+    return None
 
 
 def heard_wake_word(model: Model, frame: np.ndarray) -> bool:

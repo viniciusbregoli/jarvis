@@ -37,7 +37,8 @@ CONFIG = {
             },
         },
     },
-    "tts": {"voice_id": VOICE_ID},
+    # 44.1 kHz instead of the 16 kHz default, which sounds like a phone call.
+    "tts": {"voice_id": VOICE_ID, "agent_output_audio_format": "pcm_44100"},
     # Max allowed; our own idle timer closes the session well before the agent would nag.
     "turn": {"turn_timeout": 30},
 }

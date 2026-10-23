@@ -15,7 +15,8 @@ WAKE_THRESHOLD = 0.5
 class SoundDeviceAudio(AudioInterface):
     """Same job as the SDK's DefaultAudioInterface, which needs PyAudio (it doesn't build on this Mac)."""
 
-    def __init__(self):
+    def __init__(self, mic: str | None = None):
+        self.device = input_device(mic)
         # Set here, not in start(): the SDK calls start() from its own thread after connecting, and the idle timer
         # may read this first.
         self.last_played = time.monotonic()
@@ -24,6 +25,7 @@ class SoundDeviceAudio(AudioInterface):
         self.pending = queue.Queue()
         self.stopping = threading.Event()
         self.mic = sd.RawInputStream(
+            device=self.device,
             samplerate=RATE,
             channels=1,
             dtype="int16",
@@ -72,12 +74,24 @@ def heard_wake_word(model: Model, frame: np.ndarray) -> bool:
     return max(model.predict(frame).values()) > WAKE_THRESHOLD
 
 
-def wait_for_wake_word(model: Model, talk_now: threading.Event):
-    """Returns when "Hey Jarvis" is heard or `talk_now` is set (the menu bar's Talk now)."""
-    with sd.InputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=WAKE_FRAME) as mic:
-        while not talk_now.is_set():
-            frame, _ = mic.read(WAKE_FRAME)
+def input_mics() -> list[str]:
+    return [d["name"] for d in sd.query_devices() if d["max_input_channels"] > 0]
+
+
+def input_device(mic: str | None) -> int | None:
+    """Device index for a mic name; None (system default) when unset or no longer plugged in."""
+    if not mic:
+        return None
+    return next((i for i, d in enumerate(sd.query_devices()) if d["name"] == mic and d["max_input_channels"]), None)
+
+
+def wait_for_wake_word(model: Model, mic: str | None, interrupt: threading.Event) -> bool:
+    """True when "Hey Jarvis" is heard, False when `interrupt` is set (Talk now, or a mic change)."""
+    stream = sd.InputStream(device=input_device(mic), samplerate=RATE, channels=1, dtype="int16", blocksize=WAKE_FRAME)
+    with stream:
+        while not interrupt.is_set():
+            frame, _ = stream.read(WAKE_FRAME)
             if heard_wake_word(model, frame[:, 0]):
                 model.reset()
-                return
-    talk_now.clear()
+                return True
+    return False

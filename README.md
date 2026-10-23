@@ -26,6 +26,8 @@ Ask in Portuguese or English; Jarvis always answers in Brazilian Portuguese, sta
 - **Clipboard**: "read what I copied"
 - **Screen**: "what's on my screen?" takes a screenshot and has Claude describe it with every tool turned off (about 5 s, uses your Claude login)
 
+Conversations go through Apple's voice processing (the echo cancellation FaceTime uses), so Jarvis doesn't hear itself on the laptop speakers and you can talk over it to interrupt. While it's on, macOS lowers other audio, like during a FaceTime call.
+
 First use of each asks for a macOS permission for the app running Jarvis: Accessibility (media keys), Automation for Reminders, Screen Recording (screen).
 
 Needs `ELEVEN_LABS_API_KEY` in the environment or in `~/.claude/.env`. Each start pushes the agent config in `jarvis/agent.py` to ElevenLabs, creating the "Jarvis" agent on first run. A session ends when you say goodbye or after 12 s of silence.

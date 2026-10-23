@@ -2,6 +2,7 @@ import os
 import sys
 from pathlib import Path
 
+from elevenlabs import ToolRequestModel
 from elevenlabs.client import ElevenLabs
 
 NAME = "Jarvis"
@@ -11,7 +12,10 @@ PROMPT = """You are Jarvis, a voice assistant running on Vinicius's Mac, in the 
 
 - Everything you say is spoken aloud. Keep replies to one or two short sentences, no lists, no markdown, no URLs.
 - Reply in the language Vinicius just spoke (Brazilian Portuguese or English). Switch when they switch.
-- You can't act on the computer yet. If asked to run, open, check or change something, say that ability isn't connected yet.
+- The current local time is {{now}}. Use it to turn "in 10 minutes" or "tomorrow at 5" into exact values for tools.
+- Use your tools when asked: open apps or URLs, control volume and music, set timers, add reminders, read the clipboard, look at the screen. Do it right away, then confirm in a few words, in the language Vinicius used.
+- describe_screen takes a while: say "one moment" before calling it.
+- You can't yet run commands, check code, browse the web or click around apps. If asked, say that ability isn't connected yet.
 - When Vinicius says goodbye, thanks you to close, or says "that's all" / "é isso", answer with a short sign-off and call end_call."""
 
 # The agent's config lives here and is pushed on every start, so the dashboard never drifts from the code.
@@ -50,9 +54,35 @@ def api_key() -> str:
     sys.exit("ELEVEN_LABS_API_KEY is not set (env or ~/.claude/.env)")
 
 
-def ensure_agent(client: ElevenLabs) -> str:
+def sync_tools(client: ElevenLabs, specs: list[dict]) -> list[str]:
+    """Create or update each client tool in ElevenLabs and return their ids, matching on name."""
+    tools = client.conversational_ai.tools
+    existing = {
+        t.tool_config.name: t.id
+        for t in tools.list(types="client", show_only_owned_documents=True, page_size=100).tools
+    }
+    ids = []
+    for spec in specs:
+        request = ToolRequestModel(
+            tool_config={
+                "type": "client",
+                "name": spec["name"],
+                "description": spec["description"],
+                "parameters": spec["parameters"],
+                "expects_response": True,
+                "response_timeout_secs": spec.get("timeout", 20),
+            }
+        )
+        tool_id = existing.get(spec["name"])
+        ids.append(tools.update(tool_id, request=request).id if tool_id else tools.create(request=request).id)
+    return ids
+
+
+def ensure_agent(client: ElevenLabs, specs: list[dict]) -> str:
+    prompt = {**CONFIG["agent"]["prompt"], "tool_ids": sync_tools(client, specs)}
+    config = {**CONFIG, "agent": {**CONFIG["agent"], "prompt": prompt}}
     found = [a for a in client.conversational_ai.agents.list(search=NAME).agents if a.name == NAME]
     if found:
-        client.conversational_ai.agents.update(agent_id=found[0].agent_id, conversation_config=CONFIG)
+        client.conversational_ai.agents.update(agent_id=found[0].agent_id, conversation_config=config)
         return found[0].agent_id
-    return client.conversational_ai.agents.create(name=NAME, conversation_config=CONFIG).agent_id
+    return client.conversational_ai.agents.create(name=NAME, conversation_config=config).agent_id

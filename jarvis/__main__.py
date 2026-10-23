@@ -1,3 +1,4 @@
+import datetime as dt
 import threading
 import time
 from pathlib import Path
@@ -6,11 +7,12 @@ import openwakeword
 import rumps
 import sounddevice as sd
 from elevenlabs.client import ElevenLabs
-from elevenlabs.conversational_ai.conversation import Conversation
+from elevenlabs.conversational_ai.conversation import ClientTools, Conversation, ConversationInitiationData
 from openwakeword.model import Model
 
 from .agent import api_key, ensure_agent
 from .audio import SoundDeviceAudio, input_mics, refresh_devices, wait_for_wake_word
+from .tools import SPECS
 
 IDLE_SECONDS = 12  # silence after Jarvis stops talking before the session closes (sessions bill per minute)
 RETRY_SECONDS = 10
@@ -30,11 +32,16 @@ def converse(client: ElevenLabs, agent_id: str, mic: str | None):
         last_user = time.monotonic()
         print(f"you: {text}")
 
+    tools = ClientTools()
+    for spec in SPECS:
+        tools.register(spec["name"], spec["handler"])
     conversation = Conversation(
         client,
         agent_id,
         requires_auth=True,
         audio_interface=audio,
+        client_tools=tools,
+        config=ConversationInitiationData(dynamic_variables={"now": dt.datetime.now().strftime("%A %Y-%m-%d %H:%M")}),
         callback_user_transcript=on_user,
         callback_agent_response=lambda text: print(f"jarvis: {text}"),
         callback_end_session=ended.set,
@@ -98,7 +105,7 @@ class JarvisApp(rumps.App):
         agent_id = None
         while True:
             try:
-                agent_id = agent_id or ensure_agent(self.client)
+                agent_id = agent_id or ensure_agent(self.client, SPECS)
                 refresh_devices()
                 self.mics, self.default_mic = input_mics(), sd.query_devices(kind="input")["name"]
                 self.status = ("listening", "Listening for “Hey Jarvis”")

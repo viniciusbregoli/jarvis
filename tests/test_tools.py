@@ -33,6 +33,13 @@ def test_media_reports_failures(monkeypatch):
     assert tools.media({"action": "mute"}) == "Couldn't mute"
 
 
+def test_media_status_reads_real_settings(monkeypatch):
+    result = Result()
+    result.stdout = "output volume:30, input volume:50, alert volume:100, output muted:false"
+    monkeypatch.setattr(tools, "run", lambda *cmd, **_: result)
+    assert tools.media({"action": "status"}).startswith("Current settings: output volume:30")
+
+
 def test_open_target_uses_open_for_urls_and_open_a_for_apps(monkeypatch):
     calls = []
     monkeypatch.setattr(tools, "run", lambda *cmd, **_: calls.append(cmd) or Result())

@@ -59,6 +59,9 @@ def press_media_key(code: int):
 
 def media(params: dict) -> str:
     action = params["action"]
+    if action == "status":
+        settings = run("osascript", "-e", "get volume settings").stdout.strip()
+        return f"Current settings: {settings}" if settings else "Couldn't read the volume"
     if action == "volume":
         level = max(0, min(100, int(params.get("level", 50))))
         if run("osascript", "-e", f"set volume output volume {level}").returncode:
@@ -154,13 +157,13 @@ SPECS = [
     {
         "name": "media",
         "handler": media,
-        "description": "Control audio: set the volume, mute or unmute, play/pause, next or previous track.",
+        "description": "Control audio: read the current volume (status), set the volume, mute or unmute, play/pause, next or previous track.",
         "parameters": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["volume", "mute", "unmute", "play_pause", "next", "previous"],
+                    "enum": ["status", "volume", "mute", "unmute", "play_pause", "next", "previous"],
                     "description": "What to do",
                 },
                 "level": {"type": "integer", "description": "Volume 0 to 100, only for action=volume"},

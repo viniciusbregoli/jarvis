@@ -1,4 +1,4 @@
-"""The two CoreAudio calls Jarvis needs (list devices, read a name), through ctypes: PyObjC has no CoreAudio
+"""The few CoreAudio calls Jarvis needs (list devices, read a name, switch the system input), through ctypes: PyObjC has no CoreAudio
 bindings."""
 
 import ctypes
@@ -29,6 +29,27 @@ def devices() -> list[int]:
     ids = (ctypes.c_uint32 * (size.value // 4))()
     _lib.AudioObjectGetPropertyData(SYSTEM_OBJECT, ctypes.byref(address), 0, None, ctypes.byref(size), ids)
     return list(ids)
+
+
+def default_input() -> int:
+    address, device = _address("dIn "), ctypes.c_uint32()
+    size = ctypes.c_uint32(ctypes.sizeof(device))
+    _lib.AudioObjectGetPropertyData(
+        SYSTEM_OBJECT, ctypes.byref(address), 0, None, ctypes.byref(size), ctypes.byref(device)
+    )
+    return device.value
+
+
+def find(device_name: str) -> int | None:
+    return next((device for device in devices() if name(device) == device_name), None)
+
+
+def set_default_input(device: int):
+    """Same as picking the input in System Settings > Sound."""
+    address, value = _address("dIn "), ctypes.c_uint32(device)
+    _lib.AudioObjectSetPropertyData(
+        SYSTEM_OBJECT, ctypes.byref(address), 0, None, ctypes.sizeof(value), ctypes.byref(value)
+    )
 
 
 def name(device: int) -> str:

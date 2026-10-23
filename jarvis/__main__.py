@@ -10,6 +10,7 @@ from elevenlabs.client import ElevenLabs
 from elevenlabs.conversational_ai.conversation import ClientTools, Conversation, ConversationInitiationData
 from openwakeword.model import Model
 
+from . import coreaudio
 from .agent import api_key, ensure_agent
 from .audio import VoiceProcessingAudio, input_mics, refresh_devices, wait_for_wake_word
 from .tools import SPECS
@@ -17,13 +18,12 @@ from .tools import SPECS
 IDLE_SECONDS = 12  # silence after Jarvis stops talking before the session closes (sessions bill per minute)
 RETRY_SECONDS = 10
 ASSETS = Path(__file__).parent.parent / "assets"
-MIC_FILE = Path.home() / ".config/jarvis/mic"
 # HAL's eye doubles as a status light: grey when not listening, dim red while waiting, bright red in a conversation.
 ICONS = {state: str(ASSETS / f"menubar-{state}.png") for state in ("idle", "listening", "talking")}
 
 
-def converse(client: ElevenLabs, agent_id: str, mic: str | None):
-    audio = VoiceProcessingAudio(mic)
+def converse(client: ElevenLabs, agent_id: str):
+    audio = VoiceProcessingAudio()
     ended = threading.Event()
     last_user = time.monotonic()
 
@@ -61,7 +61,6 @@ class JarvisApp(rumps.App):
         self.status_item = rumps.MenuItem(self.status[1])
         self.interrupt = threading.Event()
         self.talk_requested = False
-        self.mic = MIC_FILE.read_text().strip() or None if MIC_FILE.exists() else None
         # Filled by the voice thread after each device refresh; the main thread only reads them.
         self.mics, self.default_mic, self.shown_mics = [], "", None
         self.mic_menu = rumps.MenuItem("Microphone")
@@ -78,8 +77,8 @@ class JarvisApp(rumps.App):
         if self.mics != self.shown_mics:
             for title in list(self.mic_menu.keys()):  # rumps clear() fails on a submenu that was never filled
                 del self.mic_menu[title]
-            for name in [None, *self.mics]:
-                self.mic_menu.add(rumps.MenuItem(name or "System default", callback=self.pick_mic))
+            for name in self.mics:
+                self.mic_menu.add(rumps.MenuItem(name, callback=self.pick_mic))
             self.shown_mics = self.mics
         self.show_mic()
 
@@ -88,17 +87,17 @@ class JarvisApp(rumps.App):
         self.interrupt.set()
 
     def pick_mic(self, item):
-        self.mic = None if item.title == "System default" else item.title
-        MIC_FILE.parent.mkdir(parents=True, exist_ok=True)
-        MIC_FILE.write_text(self.mic or "")
+        # Switches macOS's input (other apps follow too); Jarvis always listens on the system input.
+        if (device := coreaudio.find(item.title)) is not None:
+            coreaudio.set_default_input(device)
+        self.default_mic = coreaudio.name(coreaudio.default_input())  # macOS refuses some, e.g. virtual devices
         self.show_mic()
         self.interrupt.set()  # reopen the wake word stream on the new mic; a conversation in progress keeps its mic
 
     def show_mic(self):
-        in_use = self.mic if self.mic in self.mics else self.default_mic  # a saved mic that's unplugged falls back
-        self.mic_menu.title = f"Microphone: {in_use}"
+        self.mic_menu.title = f"Microphone: {self.default_mic}"
         for item in self.mic_menu.values():
-            item.state = item.title == (self.mic or "System default")
+            item.state = item.title == self.default_mic
 
     def voice_loop(self):
         model = Model(wakeword_model_paths=[openwakeword.models["hey_jarvis"]["model_path"]])
@@ -109,13 +108,13 @@ class JarvisApp(rumps.App):
                 refresh_devices()
                 self.mics, self.default_mic = input_mics(), sd.query_devices(kind="input")["name"]
                 self.status = ("listening", "Listening for “Hey Jarvis”")
-                heard = wait_for_wake_word(model, self.mic, self.interrupt)
+                heard = wait_for_wake_word(model, self.interrupt)
                 self.interrupt.clear()
                 if not heard and not self.talk_requested:
                     continue
                 self.talk_requested = False
                 self.status = ("talking", "In conversation")
-                converse(self.client, agent_id, self.mic)
+                converse(self.client, agent_id)
             except Exception as error:  # noqa: BLE001
                 # A dropped network or mic shouldn't kill the thread while the icon still says "running".
                 self.status = ("idle", f"Error, retrying: {error}"[:80])

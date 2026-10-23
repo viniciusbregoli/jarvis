@@ -15,20 +15,27 @@ def test_reminder_script_sets_day_to_1_before_month():
     assert 'name:"Call Ana"' in script
 
 
+class Result:
+    def __init__(self, returncode=0):
+        self.returncode, self.stderr = returncode, ""
+
+
 def test_media_clamps_volume(monkeypatch):
     calls = []
-    monkeypatch.setattr(tools, "run", lambda *cmd, **_: calls.append(cmd))
+    monkeypatch.setattr(tools, "run", lambda *cmd, **_: calls.append(cmd) or Result())
     assert tools.media({"action": "volume", "level": 150}) == "Volume set to 100"
     assert calls == [("osascript", "-e", "set volume output volume 100")]
 
 
+def test_media_reports_failures(monkeypatch):
+    monkeypatch.setattr(tools, "run", lambda *cmd, **_: Result(1))
+    assert tools.media({"action": "volume", "level": 30}) == "Couldn't change the volume"
+    assert tools.media({"action": "mute"}) == "Couldn't mute"
+
+
 def test_open_target_uses_open_for_urls_and_open_a_for_apps(monkeypatch):
     calls = []
-
-    class Done:
-        returncode, stderr = 0, ""
-
-    monkeypatch.setattr(tools, "run", lambda *cmd, **_: calls.append(cmd) or Done())
+    monkeypatch.setattr(tools, "run", lambda *cmd, **_: calls.append(cmd) or Result())
     tools.open_target({"target": "https://github.com"})
     tools.open_target({"target": "Slack"})
     assert calls == [("open", "https://github.com"), ("open", "-a", "Slack")]

@@ -24,7 +24,7 @@ Ask in Portuguese or English:
 - **Timers**: "timer 10 minutes for the pasta"; Jarvis speaks and notifies when it ends (lost if Jarvis quits)
 - **Reminders**: "remind me tomorrow at 5 to call Ana" goes to Apple Reminders, so it reaches your phone too
 - **Clipboard**: "read what I copied"
-- **Screen**: "what's on my screen?" takes a screenshot and has Codex describe it (about 10 s, uses your ChatGPT login)
+- **Screen**: "what's on my screen?" takes a screenshot and has Claude describe it with every tool turned off (about 5 s, uses your Claude login)
 
 First use of each asks for a macOS permission for the app running Jarvis: Accessibility (media keys), Automation for Reminders, Screen Recording (screen).
 

@@ -12,9 +12,11 @@ def test_lists_only_inputs(monkeypatch):
     assert audio.input_mics() == ["External Microphone", "MacBook Air Microphone"]
 
 
-def test_finds_mic_by_name_and_falls_back_to_default(monkeypatch):
-    monkeypatch.setattr(audio.sd, "query_devices", lambda: DEVICES)
-    assert audio.input_device("MacBook Air Microphone") == 2
-    assert audio.input_device(None) is None
-    assert audio.input_device("Unplugged Headset") is None
-    assert audio.input_device("MacBook Air Speakers") is None
+def test_coreaudio_find_matches_exact_names(monkeypatch):
+    from jarvis import coreaudio
+
+    names = {89: "MacBook Air Microphone", 68: "Microsoft Teams Audio"}
+    monkeypatch.setattr(coreaudio, "devices", lambda: list(names))
+    monkeypatch.setattr(coreaudio, "name", names.get)
+    assert coreaudio.find("Microsoft Teams Audio") == 68
+    assert coreaudio.find("Unplugged Headset") is None

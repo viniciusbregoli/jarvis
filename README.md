@@ -17,7 +17,7 @@ Jarvis lives in the menu bar as a HAL 9000 eye that doubles as a status light: g
 
 ## What it can do
 
-Ask in Portuguese or English; Jarvis always answers in Brazilian Portuguese (only the opening "Yes, sir?" stays in English):
+Ask in Portuguese or English; Jarvis always answers in Brazilian Portuguese, starting with "Pois não, senhor?":
 
 - **Open apps and URLs**: "open Slack", "abre o GitHub"
 - **Volume and music**: "volume 30", "mute", "pause the music", "next song" (media keys, so any player)

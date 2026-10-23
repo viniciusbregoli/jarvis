@@ -1,0 +1,16 @@
+[project]
+name = "jarvis"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["elevenlabs", "openwakeword", "sounddevice"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120

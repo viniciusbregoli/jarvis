@@ -13,7 +13,9 @@ from .audio import SoundDeviceAudio, wait_for_wake_word
 
 IDLE_SECONDS = 12  # silence after Jarvis stops talking before the session closes (sessions bill per minute)
 RETRY_SECONDS = 10
-MENUBAR_ICON = Path(__file__).parent.parent / "assets/menubar.png"
+ASSETS = Path(__file__).parent.parent / "assets"
+# HAL's eye doubles as a status light: grey when not listening, dim red while waiting, bright red in a conversation.
+ICONS = {state: str(ASSETS / f"menubar-{state}.png") for state in ("idle", "listening", "talking")}
 
 
 def converse(client: ElevenLabs, agent_id: str):
@@ -44,9 +46,10 @@ def converse(client: ElevenLabs, agent_id: str):
 
 class JarvisApp(rumps.App):
     def __init__(self):
-        super().__init__("Jarvis", icon=str(MENUBAR_ICON), template=True, quit_button="Quit Jarvis")
-        self.status = "Starting..."
-        self.status_item = rumps.MenuItem(self.status)
+        super().__init__("Jarvis", icon=ICONS["idle"], quit_button="Quit Jarvis")
+        self.status = ("idle", "Starting...")
+        self.shown_icon = "idle"
+        self.status_item = rumps.MenuItem(self.status[1])
         self.talk_now = threading.Event()
         self.client = ElevenLabs(api_key=api_key())  # exits here, on the main thread, when the key is missing
         self.menu = [self.status_item, rumps.MenuItem("Talk now", callback=lambda _: self.talk_now.set())]
@@ -55,7 +58,9 @@ class JarvisApp(rumps.App):
     # AppKit must only be touched from the main thread, so the voice thread just sets self.status.
     @rumps.timer(0.5)
     def refresh(self, _):
-        self.status_item.title = self.status
+        icon, self.status_item.title = self.status
+        if icon != self.shown_icon:
+            self.icon, self.shown_icon = ICONS[icon], icon
 
     def voice_loop(self):
         model = Model(wakeword_model_paths=[openwakeword.models["hey_jarvis"]["model_path"]])
@@ -63,13 +68,13 @@ class JarvisApp(rumps.App):
         while True:
             try:
                 agent_id = agent_id or ensure_agent(self.client)
-                self.status = "Listening for “Hey Jarvis”"
+                self.status = ("listening", "Listening for “Hey Jarvis”")
                 wait_for_wake_word(model, self.talk_now)
-                self.status = "In conversation"
+                self.status = ("talking", "In conversation")
                 converse(self.client, agent_id)
             except Exception as error:  # noqa: BLE001
                 # A dropped network or mic shouldn't kill the thread while the icon still says "running".
-                self.status = f"Error, retrying: {error}"[:80]
+                self.status = ("idle", f"Error, retrying: {error}"[:80])
                 time.sleep(RETRY_SECONDS)
 
 

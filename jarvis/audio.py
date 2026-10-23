@@ -72,10 +72,12 @@ def heard_wake_word(model: Model, frame: np.ndarray) -> bool:
     return max(model.predict(frame).values()) > WAKE_THRESHOLD
 
 
-def wait_for_wake_word(model: Model):
+def wait_for_wake_word(model: Model, talk_now: threading.Event):
+    """Returns when "Hey Jarvis" is heard or `talk_now` is set (the menu bar's Talk now)."""
     with sd.InputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=WAKE_FRAME) as mic:
-        while True:
+        while not talk_now.is_set():
             frame, _ = mic.read(WAKE_FRAME)
             if heard_wake_word(model, frame[:, 0]):
                 model.reset()
                 return
+    talk_now.clear()

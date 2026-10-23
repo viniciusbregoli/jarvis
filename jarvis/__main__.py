@@ -1,8 +1,9 @@
-import argparse
 import threading
 import time
+from pathlib import Path
 
 import openwakeword
+import rumps
 from elevenlabs.client import ElevenLabs
 from elevenlabs.conversational_ai.conversation import Conversation
 from openwakeword.model import Model
@@ -11,6 +12,8 @@ from .agent import api_key, ensure_agent
 from .audio import SoundDeviceAudio, wait_for_wake_word
 
 IDLE_SECONDS = 12  # silence after Jarvis stops talking before the session closes (sessions bill per minute)
+RETRY_SECONDS = 10
+MENUBAR_ICON = Path(__file__).parent.parent / "assets/menubar.png"
 
 
 def converse(client: ElevenLabs, agent_id: str):
@@ -39,24 +42,35 @@ def converse(client: ElevenLabs, agent_id: str):
     conversation.wait_for_session_end()
 
 
-def main():
-    parser = argparse.ArgumentParser(prog="jarvis")
-    parser.add_argument("--push", action="store_true", help="press Enter to talk instead of saying 'Hey Jarvis'")
-    args = parser.parse_args()
+class JarvisApp(rumps.App):
+    def __init__(self):
+        super().__init__("Jarvis", icon=str(MENUBAR_ICON), template=True, quit_button="Quit Jarvis")
+        self.status = "Starting..."
+        self.status_item = rumps.MenuItem(self.status)
+        self.talk_now = threading.Event()
+        self.client = ElevenLabs(api_key=api_key())  # exits here, on the main thread, when the key is missing
+        self.menu = [self.status_item, rumps.MenuItem("Talk now", callback=lambda _: self.talk_now.set())]
+        threading.Thread(target=self.voice_loop, daemon=True).start()
 
-    client = ElevenLabs(api_key=api_key())
-    agent_id = ensure_agent(client)
-    model = None if args.push else Model(wakeword_model_paths=[openwakeword.models["hey_jarvis"]["model_path"]])
-    try:
+    # AppKit must only be touched from the main thread, so the voice thread just sets self.status.
+    @rumps.timer(0.5)
+    def refresh(self, _):
+        self.status_item.title = self.status
+
+    def voice_loop(self):
+        model = Model(wakeword_model_paths=[openwakeword.models["hey_jarvis"]["model_path"]])
+        agent_id = None
         while True:
-            if args.push:
-                input("Press Enter to talk... ")
-            else:
-                print("Listening for 'Hey Jarvis'...")
-                wait_for_wake_word(model)
-            converse(client, agent_id)
-    except KeyboardInterrupt:
-        pass
+            try:
+                agent_id = agent_id or ensure_agent(self.client)
+                self.status = "Listening for “Hey Jarvis”"
+                wait_for_wake_word(model, self.talk_now)
+                self.status = "In conversation"
+                converse(self.client, agent_id)
+            except Exception as error:  # noqa: BLE001
+                # A dropped network or mic shouldn't kill the thread while the icon still says "running".
+                self.status = f"Error, retrying: {error}"[:80]
+                time.sleep(RETRY_SECONDS)
 
 
-main()
+JarvisApp().run()

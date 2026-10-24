@@ -46,6 +46,7 @@ DEFAULT_RESULTS = {
     "task_status": "Tarefa 1 (computer, running, há 1 min): procurar a apresentação do roadmap",
     "cancel_task": "Cancelled task 1.",
     "reply_to_task": "Started task 2, continuing task 1.",
+    "publish_task": "Published task 1: https://github.com/viniciusbregoli/jarvis/pull/30",
     "slide": "Done",
     "find_files": "Found it. Paths: /Users/x/Documents/roadmap-2027.key",
 }

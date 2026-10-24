@@ -62,7 +62,6 @@ KEYS = {
     "reload": ('keystroke "r" using command down', "Reloaded the page"),
     "back": ('keystroke "[" using command down', "Went back"),
     "forward": ('keystroke "]" using command down', "Went forward"),
-    "new_tab": ('keystroke "t" using command down', "Opened a new tab"),
     "scroll_down": ("key code 121", "Scrolled down"),  # Page Down
     "scroll_up": ("key code 116", "Scrolled up"),  # Page Up
     "top": ("key code 115", "Jumped to the top of the page"),  # Home
@@ -718,8 +717,8 @@ SPECS = [
         "description": "Drive Vinicius's web browser (Zen by default, also Chrome, Helium, Safari). INSTANT, under a "
         "second: always use this for browser requests and never start a desktop task for them. Use it for 'abre o "
         "YouTube' (open, with a full https URL), 'pesquisa X' (search), 'vai pra aba do Slack' (switch_tab with a "
-        "word from the tab's title or address), 'fecha essa aba', 'nova aba', 'recarrega', 'volta', 'avança', 'desce', "
-        "'sobe', 'vai pro topo', 'vai pro final', 'aumenta o zoom', 'diminui o zoom', 'zoom normal', 'lê essa "
+        "word from the tab's title or address), 'fecha essa aba', 'recarrega', 'volta pra página anterior' (back; a bare 'volta' "
+        "during a presentation is the slide tool), 'avança', 'desce', 'sobe', 'vai pro topo', 'vai pro final', 'aumenta o zoom', 'diminui o zoom', 'zoom normal', 'lê essa "
         "página' or 'resume essa página' (read_page returns the visible text with title and URL, including "
         "logged-in pages; summarize it yourself), and 'clica em X' (click presses the link or button with that text). "
         "Every action returns a short factual line saying what happened; relay it briefly.",
@@ -729,7 +728,7 @@ SPECS = [
                 "action": {
                     "type": "string",
                     "enum": [
-                        "open", "search", "switch_tab", "close_tab", "reload", "back", "forward", "new_tab",
+                        "open", "search", "switch_tab", "close_tab", "reload", "back", "forward",
                         "scroll_down", "scroll_up", "top", "bottom", "zoom_in", "zoom_out", "zoom_reset",
                         "read_page", "click",
                     ],

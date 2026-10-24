@@ -114,10 +114,6 @@ def heard_wake_word(model: Model, frame: np.ndarray) -> bool:
     return max(model.predict(frame).values()) > WAKE_THRESHOLD
 
 
-def input_mics() -> list[str]:
-    return [d["name"] for d in sd.query_devices() if d["max_input_channels"] > 0]
-
-
 def refresh_devices():
     """PortAudio reads the device list once; re-read it so a plugged or unplugged headset is picked up."""
     sd._terminate()

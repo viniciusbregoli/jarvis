@@ -5,14 +5,13 @@ from pathlib import Path
 
 import openwakeword
 import rumps
-import sounddevice as sd
 from elevenlabs.client import ElevenLabs
 from elevenlabs.conversational_ai.conversation import ClientTools, Conversation, ConversationInitiationData
 from openwakeword.model import Model
 
 from . import coreaudio
 from .agent import api_key, ensure_agent
-from .audio import VoiceProcessingAudio, input_mics, refresh_devices, wait_for_wake_word
+from .audio import VoiceProcessingAudio, refresh_devices, wait_for_wake_word
 from .tools import SPECS
 
 IDLE_SECONDS = 12  # silence after Jarvis stops talking before the session closes (sessions bill per minute)
@@ -61,8 +60,7 @@ class JarvisApp(rumps.App):
         self.status_item = rumps.MenuItem(self.status[1])
         self.interrupt = threading.Event()
         self.talk_requested = False
-        # Filled by the voice thread after each device refresh; the main thread only reads them.
-        self.mics, self.default_mic, self.shown_mics = [], "", None
+        self.shown_mics: dict[str, int] = {}  # menu label -> CoreAudio device id
         self.mic_menu = rumps.MenuItem("Microphone")
         self.client = ElevenLabs(api_key=api_key())  # exits here, on the main thread, when the key is missing
         self.menu = [self.status_item, rumps.MenuItem("Talk now", callback=self.talk_now), self.mic_menu]
@@ -74,12 +72,14 @@ class JarvisApp(rumps.App):
         icon, self.status_item.title = self.status
         if icon != self.shown_icon:
             self.icon, self.shown_icon = ICONS[icon], icon
-        if self.mics != self.shown_mics:
+        # Read from macOS every tick, so a change in System Settings shows up even during a conversation.
+        mics = coreaudio.inputs()
+        if mics != self.shown_mics:
             for title in list(self.mic_menu.keys()):  # rumps clear() fails on a submenu that was never filled
                 del self.mic_menu[title]
-            for name in self.mics:
-                self.mic_menu.add(rumps.MenuItem(name, callback=self.pick_mic))
-            self.shown_mics = self.mics
+            for label in mics:
+                self.mic_menu.add(rumps.MenuItem(label, callback=self.pick_mic))
+            self.shown_mics = mics
         self.show_mic()
 
     def talk_now(self, _):
@@ -88,16 +88,16 @@ class JarvisApp(rumps.App):
 
     def pick_mic(self, item):
         # Switches macOS's input (other apps follow too); Jarvis always listens on the system input.
-        if (device := coreaudio.find(item.title)) is not None:
-            coreaudio.set_default_input(device)
-        self.default_mic = coreaudio.name(coreaudio.default_input())  # macOS refuses some, e.g. virtual devices
-        self.show_mic()
+        coreaudio.set_default_input(self.shown_mics[item.title])
+        self.show_mic()  # the next ticks read back what macOS actually applied (it refuses some virtual devices)
         self.interrupt.set()  # reopen the wake word stream on the new mic; a conversation in progress keeps its mic
 
     def show_mic(self):
-        self.mic_menu.title = f"Microphone: {self.default_mic}"
+        current = coreaudio.default_input()
+        label = next((label for label, device in self.shown_mics.items() if device == current), None)
+        self.mic_menu.title = f"Microphone: {label or coreaudio.name(current)}"
         for item in self.mic_menu.values():
-            item.state = item.title == self.default_mic
+            item.state = self.shown_mics.get(item.title) == current
 
     def voice_loop(self):
         model = Model(wakeword_model_paths=[openwakeword.models["hey_jarvis"]["model_path"]])
@@ -106,7 +106,6 @@ class JarvisApp(rumps.App):
             try:
                 agent_id = agent_id or ensure_agent(self.client, SPECS)
                 refresh_devices()
-                self.mics, self.default_mic = input_mics(), sd.query_devices(kind="input")["name"]
                 self.status = ("listening", "Listening for “Hey Jarvis”")
                 heard = wait_for_wake_word(model, self.interrupt)
                 self.interrupt.clear()

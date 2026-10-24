@@ -166,6 +166,30 @@ def test_page_text_reads_visible_text_in_order_and_skips_hidden_and_offscreen():
     assert browser.page_text(tree, tree.frame) == "Title\nHello\nBye"
 
 
+def test_page_text_finds_visible_text_inside_a_container_whose_frame_is_scrolled_away():
+    wrapper = FakeNode(role="AXGroup", frame=Rect(0, -7000, 800, 600), children=[text("footer", 100)])
+    tree = page(wrapper)
+    assert browser.page_text(tree, tree.frame) == "footer"
+
+
+def test_page_text_skips_navigation_and_search_landmarks():
+    nav = FakeNode(role="AXGroup", subrole="AXLandmarkNavigation", children=[text("Menu", 10)])
+    search = FakeNode(role="AXGroup", subrole="AXLandmarkSearch", children=[text("Search box", 20)])
+    main = FakeNode(role="AXGroup", subrole="AXLandmarkMain", children=[text("Article", 30)])
+    tree = page(nav, search, main)
+    assert browser.page_text(tree, tree.frame) == "Article"
+    assert [
+        label
+        for label, _ in browser.clickables(
+            page(FakeNode(role="AXGroup", subrole="AXLandmarkNavigation", children=[link("Home", 10)])), None
+        )
+    ] == ["Home"]
+
+
+def test_page_text_ignores_a_viewport_without_size():
+    assert browser.page_text(page(text("hi", 5000)), Rect(0, 0, 0, 0)) == "hi"
+
+
 def test_page_text_joins_pieces_on_the_same_line():
     tree = page(text("Price:", 10), text("$5", 10), text("Next line", 40))
     assert browser.page_text(tree, tree.frame) == "Price: $5\nNext line"
@@ -288,6 +312,7 @@ def test_click_reports_a_failed_press(monkeypatch, zen):
     stuck = link("Go", 10)
     stuck.press = lambda: False
     monkeypatch.setattr(browser, "page_area", lambda b: (None, page(stuck), None))
+    monkeypatch.setattr(time, "sleep", lambda s: None)
     assert browser.click({"text": "go"}) == "Found the link 'Go' but pressing it failed."
 
 
@@ -296,6 +321,7 @@ class Done:
 
 
 def test_open_and_search_use_open_with_the_browser_bundle(monkeypatch, zen):
+    monkeypatch.setattr(browser, "bring_to_front", lambda b: None)
     calls = []
     monkeypatch.setattr(browser.subprocess, "run", lambda cmd, **_: calls.append(cmd) or Done())
     assert browser.browser_tool({"action": "open", "url": "https://example.com"}) == "Opened https://example.com in Zen"
@@ -355,17 +381,52 @@ def test_switch_firefox_types_the_tab_search_then_confirms_by_title(monkeypatch)
     monkeypatch.setattr(browser, "ax_trusted", lambda: True)
     monkeypatch.setattr(browser, "send_keys", lambda b, *commands: sent.append(commands))
     monkeypatch.setattr(browser, "current_title", lambda b: next(titles))
-    monkeypatch.setattr(browser, "TAB_SEARCH_WAIT", 0)
+    monkeypatch.setattr(browser, "wait_for_tab_search", lambda b, query: True)
     assert browser.switch_firefox(ZEN_BROWSER, "slack") == "Switched to the tab 'Slack | general'"
-    assert sent == [('keystroke "l" using command down', 'keystroke "% slack"'), ("key code 36",)]
+    assert sent == [('keystroke "l" using command down', 'keystroke "% slack"'), ("key code 125", "key code 36")]
 
 
 def test_switch_firefox_says_when_nothing_changed(monkeypatch):
+    left = []
     monkeypatch.setattr(browser, "ax_trusted", lambda: True)
     monkeypatch.setattr(browser, "send_keys", lambda b, *commands: None)
     monkeypatch.setattr(browser, "current_title", lambda b: "Example Domain")
-    monkeypatch.setattr(browser, "TAB_SEARCH_WAIT", 0)
-    assert "No tab seemed to match 'jira'" in browser.switch_firefox(ZEN_BROWSER, "jira")
+    monkeypatch.setattr(browser, "wait_for_tab_search", lambda b, query: True)
+    monkeypatch.setattr(browser, "leave_urlbar", lambda b: left.append(True))
+    times = iter([0, 2])
+    monkeypatch.setattr(time, "monotonic", lambda: next(times))
+    assert "No other tab seemed to match 'jira'" in browser.switch_firefox(ZEN_BROWSER, "jira")
+    assert left
+
+
+def test_switch_firefox_escapes_instead_of_pressing_return_when_the_tab_search_never_opens(monkeypatch):
+    sent = []
+    monkeypatch.setattr(browser, "ax_trusted", lambda: True)
+    monkeypatch.setattr(browser, "send_keys", lambda b, *commands: sent.append(commands))
+    monkeypatch.setattr(browser, "current_title", lambda b: "Example Domain")
+    monkeypatch.setattr(browser, "wait_for_tab_search", lambda b, query: False)
+    monkeypatch.setattr(browser, "leave_urlbar", lambda b: sent.append("left the address bar"))
+    assert browser.switch_firefox(ZEN_BROWSER, "slack") == "The tab search didn't open, so nothing was changed."
+    assert sent[-1] == "left the address bar" and ("key code 125", "key code 36") not in sent
+
+
+def test_leave_urlbar_presses_escape_only_while_the_address_bar_has_focus(monkeypatch):
+    sent, focus = [], iter([FakeNode(role="AXComboBox"), FakeNode(role="AXWebArea")])
+    monkeypatch.setattr(browser, "focused_node", lambda b: next(focus))
+    monkeypatch.setattr(browser, "send_keys", lambda b, *commands: sent.append(commands))
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    browser.leave_urlbar(ZEN_BROWSER)
+    assert sent == [("key code 53",)]
+
+
+def test_wait_for_tab_search_waits_for_the_prefix_to_become_a_chip(monkeypatch):
+    values = iter(["% slack", "% slack", "slack"])
+    monkeypatch.setattr(browser, "urlbar_value", lambda b: next(values))
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    assert browser.wait_for_tab_search(ZEN_BROWSER, "slack")
+    monkeypatch.setattr(browser, "urlbar_value", lambda b: "% slack")
+    monkeypatch.setattr(browser, "TAB_SEARCH_TIMEOUT", 0)
+    assert not browser.wait_for_tab_search(ZEN_BROWSER, "slack")
 
 
 def test_switch_firefox_needs_accessibility(monkeypatch):

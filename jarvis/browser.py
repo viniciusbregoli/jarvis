@@ -22,14 +22,17 @@ from ApplicationServices import (
     AXValueGetType,
     AXValueGetValue,
 )
+from Foundation import NSDate, NSRunLoop
 
 READ_LIMIT = 4000
 READ_BUDGET = 2.0  # seconds spent walking the accessibility tree
 MAX_NODES = 6000
-TAB_SEARCH_WAIT = 0.35  # Firefox needs a moment to fill the open-tabs results before Return picks the first one
+TAB_SEARCH_TIMEOUT = 1.5
 CLICK_ROLES = {"AXLink", "AXButton"}
 TEXT_ROLES = {"AXStaticText", "AXHeading", "AXTextArea"}
-AX_ATTRS = ["AXRole", "AXTitle", "AXValue", "AXDescription", "AXHidden", "AXFrame", "AXURL", "AXChildren"]
+# Menus and search boxes would fill the read-out before the article starts.
+CHROME_LANDMARKS = {"AXLandmarkNavigation", "AXLandmarkSearch"}
+AX_ATTRS = ["AXRole", "AXSubrole", "AXTitle", "AXValue", "AXDescription", "AXHidden", "AXFrame", "AXURL", "AXChildren"]
 AX_RECT_TYPE = 3  # kAXValueCGRectType
 
 ZEN = "app.zen-browser.zen"
@@ -221,6 +224,7 @@ class Node:
     """The fields the walkers read. AXNode fills them lazily from a live element."""
 
     role: str = ""
+    subrole: str = ""
     title: str = ""
     value: str = ""
     description: str = ""
@@ -243,20 +247,22 @@ class AXNode:
     def _load(self) -> Node:
         if self._data is None:
             _, values = AXUIElementCopyMultipleAttributeValues(self.element, AX_ATTRS, 0, None)
-            role, title, value, description, hidden, frame, url, children = values or [None] * len(AX_ATTRS)
+            role, subrole, title, value, description, hidden, frame, url, children = values or [None] * len(AX_ATTRS)
             self._data = Node(
                 role=text_of(role),
+                subrole=text_of(subrole),
                 title=text_of(title),
                 value=text_of(value),
                 description=text_of(description),
                 url=str(url.absoluteString()) if hasattr(url, "absoluteString") else "",
                 hidden=hidden is True or hidden == 1,
                 frame=rect_of(frame),
-                children=[AXNode(c) for c in children] if isinstance(children, (list, tuple)) else [],
+                children=[AXNode(c) for c in children] if is_array(children) else [],
             )
         return self._data
 
     role = property(lambda self: self._load().role)
+    subrole = property(lambda self: self._load().subrole)
     title = property(lambda self: self._load().title)
     value = property(lambda self: self._load().value)
     description = property(lambda self: self._load().description)
@@ -267,6 +273,16 @@ class AXNode:
 
     def press(self) -> bool:
         return AXUIElementPerformAction(self.element, "AXPress") == 0
+
+
+def is_array(value) -> bool:
+    """AX arrays arrive as NSArray proxies, which are neither list nor tuple."""
+    return (
+        value is not None
+        and not isinstance(value, (str, bytes))
+        and hasattr(value, "__len__")
+        and hasattr(value, "__iter__")
+    )
 
 
 def text_of(value) -> str:
@@ -289,13 +305,14 @@ def is_visible(node: Node, viewport: Rect | None) -> bool:
     if node.hidden:
         return False
     frame = node.frame
-    if viewport is None or frame is None or frame.w <= 0 or frame.h <= 0:
+    if viewport is None or viewport.w <= 0 or viewport.h <= 0 or frame is None or frame.w <= 0 or frame.h <= 0:
         return True
     return frame.overlaps(viewport)
 
 
 class Walk:
-    """Depth-first traversal in document order, stopping at a node count or a deadline, whichever comes first."""
+    """Depth-first traversal in document order, stopping at a node count or a deadline, whichever comes first. With a
+    viewport it yields only the nodes on screen."""
 
     def __init__(
         self,
@@ -304,8 +321,9 @@ class Walk:
         budget: float = READ_BUDGET,
         max_nodes: int = MAX_NODES,
         skip: Node | None = None,
+        skip_subroles: frozenset | set = frozenset(),
     ):
-        self.root, self.viewport, self.skip = root, viewport, skip
+        self.root, self.viewport, self.skip, self.skip_subroles = root, viewport, skip, skip_subroles
         self.deadline = time.monotonic() + budget
         self.left = max_nodes
         self.truncated = False
@@ -318,9 +336,12 @@ class Walk:
                 return
             self.left -= 1
             node = stack.pop()
-            if node is not self.root and not is_visible(node, self.viewport):
+            if node is not self.root and (node.hidden or node.subrole in self.skip_subroles):
                 continue
-            yield node
+            # Only hidden nodes prune their subtree: a container's frame can be far smaller than its content (the
+            # page body reports one screen's height), so a scrolled-away frame says nothing about its children.
+            if node is self.root or is_visible(node, self.viewport):
+                yield node
             stack.extend(c for c in reversed(node.children) if c is not self.skip)
 
 
@@ -334,7 +355,7 @@ def page_text(root: Node, viewport: Rect | None, budget: float = READ_BUDGET, ma
     """The visible text under a web area. Pieces on the same line are joined with a space, others with a newline."""
     lines: list[str] = []
     last: Rect | None = None
-    for node in Walk(root, viewport, budget, max_nodes).nodes():
+    for node in Walk(root, viewport, budget, max_nodes, skip_subroles=CHROME_LANDMARKS).nodes():
         text = node_text(node)
         if not text or (lines and lines[-1].endswith(text) and last == node.frame):
             continue
@@ -400,7 +421,13 @@ def find_url_field(window: Node, web_area: Node | None) -> str:
 # Live system access
 
 
+def pause(seconds: float):
+    """Sleep while letting AppKit deliver its notifications: NSWorkspace's frontmost app is stale otherwise."""
+    NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(seconds))
+
+
 def frontmost_bundle() -> str:
+    pause(0.001)
     app = NSWorkspace.sharedWorkspace().frontmostApplication()
     return (app.bundleIdentifier() or "") if app else ""
 
@@ -426,15 +453,15 @@ def bring_to_front(browser: Browser) -> str | None:
     app = running_app(browser.bundle_id)
     if app is None:
         subprocess.run(["open", "-b", browser.bundle_id], check=False, capture_output=True, timeout=10)
-        time.sleep(1.0)
+        pause(1.0)
         app = running_app(browser.bundle_id)
     if app is None:
         return f"{browser.name} isn't running"
     app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
-    for _ in range(20):
+    for _ in range(60):  # up to 3 s: a browser on another space switches to it with an animation
         if frontmost_bundle() == browser.bundle_id:
             return None
-        time.sleep(0.05)
+        pause(0.05)
     return f"Couldn't bring {browser.name} to the front"
 
 
@@ -502,17 +529,24 @@ def current_title(browser: Browser) -> str:
 # Actions
 
 
+def open_in_browser(browser: Browser, url: str) -> str | None:
+    """Open the URL in a new tab and bring the browser forward; returns the error text, or None on success."""
+    result = subprocess.run(
+        ["open", "-b", browser.bundle_id, url], capture_output=True, text=True, check=False, timeout=10
+    )
+    if result.returncode:
+        return result.stderr.strip() or "open failed"
+    bring_to_front(browser)  # `open` leaves a browser on another space or display in the background
+    return None
+
+
 def open_url(params: dict) -> str:
     url = normalize_url(params.get("url", ""))
     if not url:
         return "That isn't a web address; use the search action for plain words."
     browser = pick_browser()
-    result = subprocess.run(
-        ["open", "-b", browser.bundle_id, url], capture_output=True, text=True, check=False, timeout=10
-    )
-    if result.returncode:
-        return f"Couldn't open {url} in {browser.name}: {result.stderr.strip()}"
-    return f"Opened {url} in {browser.name}"
+    problem = open_in_browser(browser, url)
+    return f"Couldn't open {url} in {browser.name}: {problem}" if problem else f"Opened {url} in {browser.name}"
 
 
 def search(params: dict) -> str:
@@ -520,12 +554,12 @@ def search(params: dict) -> str:
     if not query:
         return "Nothing to search for."
     browser = pick_browser()
-    result = subprocess.run(
-        ["open", "-b", browser.bundle_id, search_url(query)], capture_output=True, text=True, check=False, timeout=10
+    problem = open_in_browser(browser, search_url(query))
+    return (
+        f"Couldn't search in {browser.name}: {problem}"
+        if problem
+        else f"Searched Google for '{query}' in {browser.name}"
     )
-    if result.returncode:
-        return f"Couldn't search in {browser.name}: {result.stderr.strip()}"
-    return f"Searched Google for '{query}' in {browser.name}"
 
 
 def switch_scripted(browser: Browser, query: str) -> str:
@@ -544,6 +578,41 @@ def switch_scripted(browser: Browser, query: str) -> str:
     return f"Switched to the tab '{title}'"
 
 
+def focused_node(browser: Browser) -> AXNode | None:
+    app = running_app(browser.bundle_id)
+    focused = ax_get(AXUIElementCreateApplication(app.processIdentifier()), "AXFocusedUIElement") if app else None
+    return AXNode(focused) if focused else None
+
+
+def urlbar_value(browser: Browser) -> str:
+    """The text of the focused element (the address bar while a tab search is being typed)."""
+    node = focused_node(browser)
+    return node.value if node else ""
+
+
+def leave_urlbar(browser: Browser):
+    """Escape out of the address bar. Only while it has focus: Escape on the page itself would, for instance, end a
+    fullscreen presentation."""
+    for _ in range(2):
+        node = focused_node(browser)
+        if not node or node.role != "AXComboBox":
+            return
+        send_keys(browser, "key code 53")
+        time.sleep(0.1)
+
+
+def wait_for_tab_search(browser: Browser, query: str) -> bool:
+    """Firefox swaps the '% ' prefix for a 'Tabs' chip a moment after typing it, and only then lists the open tabs;
+    Return before that does nothing. The address bar text becoming just the query marks the switch."""
+    deadline = time.monotonic() + TAB_SEARCH_TIMEOUT
+    while time.monotonic() < deadline:
+        if normalize(urlbar_value(browser)) == normalize(query):
+            time.sleep(0.1)  # the results are painted right with the chip; this only covers slower machines
+            return True
+        time.sleep(0.03)
+    return False
+
+
 def switch_firefox(browser: Browser, query: str) -> str:
     """Cmd+L, then '% query' filters the address bar to open tabs and Return picks the first."""
     if not ax_trusted():
@@ -552,16 +621,22 @@ def switch_firefox(browser: Browser, query: str) -> str:
     problem = send_keys(browser, 'keystroke "l" using command down', f"keystroke {applescript_string('% ' + query)}")
     if problem:
         return problem
-    time.sleep(TAB_SEARCH_WAIT)
-    problem = send_keys(browser, "key code 36")  # Return
+    if not wait_for_tab_search(browser, query):
+        leave_urlbar(browser)
+        return "The tab search didn't open, so nothing was changed."
+    problem = send_keys(browser, "key code 125", "key code 36")  # Down selects the first result, Return opens it
     if problem:
         return problem
-    time.sleep(0.4)
+    deadline = time.monotonic() + 1.0
     title = current_title(browser)
+    while title == before and time.monotonic() < deadline:
+        time.sleep(0.05)
+        title = current_title(browser)
     if not title:
         return "Pressed Return on the tab search, but couldn't read the window title to confirm."
-    if title == before and score_match(query, title) == 0:
-        return f"No tab seemed to match '{query}'; the tab in front is still '{title}'."
+    if title == before:
+        leave_urlbar(browser)  # with no result, Return leaves the typed search sitting in the address bar
+        return f"No other tab seemed to match '{query}'; the tab in front is still '{title}'."
     suffix = "" if score_match(query, title) else f" (it doesn't obviously match '{query}')"
     return f"Switched to the tab '{title}'{suffix}"
 
@@ -599,21 +674,24 @@ def click(params: dict) -> str:
     if not query:
         return "Click what?"
     browser = pick_browser()
-    _, area, problem = page_area(browser)
-    if problem:
-        return problem
-    items = clickables(area, area.frame)
-    verdict, best = pick_click(query, items)
-    if verdict == "none":
-        close = close_labels(query, [label for label, _ in items])
-        return f"No link or button matches '{query}'." + (f" Closest: {'; '.join(close)}" if close else "")
-    if verdict == "ambiguous":
-        return f"Several match '{query}': " + "; ".join(f"'{label}'" for label, _ in best) + ". Which one?"
-    label, node = best[0]
-    kind = "link" if node.role == "AXLink" else "button"
-    if not node.press():
-        return f"Found the {kind} '{label}' but pressing it failed."
-    return f"Clicked the {kind} '{label}'"
+    for attempt in range(2):
+        _, area, problem = page_area(browser)
+        if problem:
+            return problem
+        items = clickables(area, area.frame)
+        verdict, best = pick_click(query, items)
+        if verdict == "none":
+            close = close_labels(query, [label for label, _ in items])
+            return f"No link or button matches '{query}'." + (f" Closest: {'; '.join(close)}" if close else "")
+        if verdict == "ambiguous":
+            return f"Several match '{query}': " + "; ".join(f"'{label}'" for label, _ in best) + ". Which one?"
+        label, node = best[0]
+        kind = "link" if node.role == "AXLink" else "button"
+        if node.press():
+            return f"Clicked the {kind} '{label}'"
+        if attempt == 0:
+            time.sleep(0.4)  # a page that is still loading rebuilds its tree and invalidates the element
+    return f"Found the {kind} '{label}' but pressing it failed."
 
 
 def browser_tool(params: dict) -> str:

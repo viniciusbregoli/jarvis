@@ -358,7 +358,68 @@ forbid = [{ tool = "start_task", args = { kind = "desktop" } }]
 name = "find-in-code"
 say = "é... acha pra mim onde o jarvis define o prompt do agente"
 calls = [{ tool = "start_task", args = { kind = "computer" } }]
-forbid = [{ tool = "start_task", args = { kind = "desktop" } }]
+forbid = [{ tool = "start_task", args = { kind = "desktop" } }, { tool = "start_task", args = { kind = "code" } }]
+
+# --- changing code in a repo -------------------------------------------------------------------------------------------
+
+[[scenario]]
+name = "code-fix-typo"
+say = "corrige o typo no README do jarvis, tá escrito wake wrod em vez de wake word"
+calls = [{ tool = "start_task", args = { kind = "code", path = "re:jarvis", task = "re:wrod" } }]
+forbid = ["front_document", "publish_task", { tool = "start_task", args = { kind = "edit" } }]
+no_reply = 'posso|confirma|quer que|\bPR\b'
+
+[[scenario]]
+name = "code-add-test"
+say = "adiciona um teste no jarvis pro find_files quando a pasta tá vazia"
+calls = [{ tool = "start_task", args = { kind = "code", path = "re:jarvis" } }]
+forbid = ["publish_task", { tool = "start_task", args = { kind = "edit" } }]
+
+[[scenario]]
+name = "code-other-repo"
+say = "no cosmos, muda o timeout padrão do cliente http de 30 pra 60 segundos"
+calls = [{ tool = "start_task", args = { kind = "code", path = "re:cosmos", task = "re:60" } }]
+forbid = ["publish_task", { tool = "start_task", args = { kind = "desktop" } }]
+
+[[scenario]]
+name = "code-result-then-publish"
+results = { publish_task = "Published task 2: https://github.com/viniciusbregoli/jarvis/pull/30" }
+
+[[scenario.step]]
+say = "[Automatic update, not Vinicius speaking] Background task 2 (corrigir o typo do README do jarvis) done. Result: Corrigi o typo no README e os testes passam. Quer que eu abra o PR?"
+calls = "none"
+reply = '\bPR\b'
+
+[[scenario.step]]
+say = "sim"
+calls = ["publish_task"]
+no_reply = "github|https|pull/"
+
+[[scenario]]
+name = "code-result-declined"
+
+[[scenario.step]]
+say = "[Automatic update, not Vinicius speaking] Background task 2 (corrigir o typo do README do jarvis) done. Result: Corrigi o typo no README e os testes passam. Quer que eu abra o PR?"
+calls = "none"
+
+[[scenario.step]]
+say = "não, deixa assim por enquanto"
+calls = "none"
+
+[[scenario]]
+name = "code-publish-later"
+results = { publish_task = "Published task 2: https://github.com/viniciusbregoli/jarvis/pull/30" }
+say = "abre o PR daquela correção do jarvis"
+calls = ["publish_task"]
+forbid = ["start_task"]
+no_reply = "github|https|pull/"
+
+[[scenario]]
+name = "code-follow-up"
+results = { task_status = "Tarefa 2 (code, done, há 3 min): corrigir o typo do README do jarvis. Resultado: Corrigi o typo no README e os testes passam. Quer que eu abra o PR?" }
+say = "na tarefa 2 do jarvis, corrige também o typo do CONTRIBUTING"
+calls = [{ tool = "reply_to_task|start_task" }]
+forbid = ["publish_task", { tool = "start_task", args = { kind = "edit" } }]
 
 # --- clicking and typing: ask first -----------------------------------------------------------------------------------------
 

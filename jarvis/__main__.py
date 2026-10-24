@@ -18,7 +18,7 @@ from .context import SPECS as CONTEXT_SPECS
 from .deck import SPECS as DECK_SPECS
 from .files import SPECS as FILE_SPECS
 from .jobs import SPECS as JOB_SPECS
-from .jobs import jobs
+from .jobs import jobs, note_utterance
 from .overlay import HALBar, activity_label
 from .tools import SPECS as MAC_SPECS
 from .tools import speak
@@ -46,12 +46,18 @@ def converse(client: ElevenLabs, agent_id: str, on_session, on_activity=lambda t
     audio = VoiceProcessingAudio()
     ended = threading.Event()
     last_user = time.monotonic()
+    last_reply = [""]  # Jarvis's last spoken reply, so a "sim" is matched against his last question
     busy = 0  # tool calls in flight; a lookup can take 30 s and the session must not close under it
 
     def on_user(text):
         nonlocal last_user
         last_user = time.monotonic()
+        note_utterance(text, last_reply[0])
         print(f"you: {text}")
+
+    def on_reply(text):
+        last_reply[0] = text
+        print(f"jarvis: {text}")
 
     def tracked(name, handler):
         def run(params):
@@ -81,7 +87,7 @@ def converse(client: ElevenLabs, agent_id: str, on_session, on_activity=lambda t
             dynamic_variables={"now": now.strftime("%A %Y-%m-%d %H:%M"), "greeting": greeting(now)}
         ),
         callback_user_transcript=on_user,
-        callback_agent_response=lambda text: print(f"jarvis: {text}"),
+        callback_agent_response=on_reply,
         callback_end_session=ended.set,
     )
 

@@ -312,7 +312,9 @@ def test_follow_ups_continue_in_the_same_worktree(monkeypatch, tmp_path):
 
 
 def test_error_line_decodes_timeout_stderr_and_falls_back():
-    assert error_line(subprocess.TimeoutExpired("git", 30, stderr=b"fatal: remote hung up\n")) == "fatal: remote hung up"
+    assert (
+        error_line(subprocess.TimeoutExpired("git", 30, stderr=b"fatal: remote hung up\n")) == "fatal: remote hung up"
+    )
     assert error_line(subprocess.CalledProcessError(1, "git", "", "a\nb")) == "b"
     assert error_line(OSError("disk full")) == "disk full"
     assert error_line(subprocess.TimeoutExpired("git", 30)) == "Command 'git' timed out after 30 seconds"

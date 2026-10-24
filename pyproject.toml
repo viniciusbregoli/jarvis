@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "elevenlabs",
+    "lz4>=4.4.5",
     "openwakeword",
     "pyobjc-framework-avfoundation>=12.2.2",
     "pyobjc-framework-quartz>=12.2.2",

@@ -1,8 +1,10 @@
 """Background jobs the voice agent hands off: Claude Code for files, code, PRs and research; Codex computer use for
-clicking around apps. Read-only for now: jobs can look and search but not change, send or delete anything."""
+clicking around apps. Jobs read and search by default; "edit" jobs may also change files, but only inside one folder,
+which is snapshotted first so "desfaz" can put it back."""
 
 import itertools
 import json
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -10,7 +12,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from AppKit import NSWorkspace
+
 JOB_TIMEOUT = 20 * 60
+SNAPSHOTS = Path.home() / ".jarvis/snapshots"
+MAX_SNAPSHOT_BYTES = 300 * 1024 * 1024  # an edit job's folder is copied first; anything bigger is too broad a target
+EDIT_TOOLS = ["Edit(./**)", "Write(./**)"]  # relative to the job's folder, its working directory
 LOOKUP_TIMEOUT = 90
 
 # Read and search only. Claude Code also allows commands it classifies as read-only (ls, cat, date) on its own;
@@ -37,19 +44,27 @@ JOB_PROMPT = (
     + " If you found files or folders, end with one last line starting with 'Paths:' and their full absolute paths, "
     "separated by ' | '; Jarvis uses that line to open them and never reads it aloud."
 )
+EDIT_PROMPT = (
+    "You are running as a background job for Jarvis, Vinicius's voice assistant on his Mac. Work on your own and "
+    "never ask questions. Your working directory is the folder of the document he is working on: you may edit and "
+    "create files only inside it. Make exactly the change he asked for and nothing else; if the request is unclear "
+    "(e.g. which slide), pick the most likely reading and say which one you changed. " + SPOKEN_ANSWER
+)
 DESKTOP_PROMPT = (
     "Use computer use to do this on the Mac: {task}\n\nNever send or post messages, buy, delete, or submit forms; if "
     "the task needs that, stop and explain. " + SPOKEN_ANSWER
 )
 
 
-def claude_command(prompt: str, resume: str | None = None) -> list[str]:
+def claude_command(prompt: str, resume: str | None = None, edit: bool = False) -> list[str]:
     # Haiku: a file search took a median 19 s against 55 s on Sonnet, with the same answer. --strict-mcp-config skips
     # starting every MCP server, whose tools read-only jobs can't call anyway.
     command = [
         "claude", "-p", prompt, "--output-format", "json", "--permission-mode", "dontAsk",
-        "--allowedTools", ",".join(READ_ONLY_TOOLS), "--disallowedTools", ",".join(WRITE_FLAGS),
-        "--append-system-prompt", JOB_PROMPT, "--model", "claude-haiku-5-5", "--strict-mcp-config",
+        "--allowedTools", ",".join(READ_ONLY_TOOLS + (EDIT_TOOLS if edit else [])),
+        "--disallowedTools", ",".join(WRITE_FLAGS),
+        "--append-system-prompt", EDIT_PROMPT if edit else JOB_PROMPT,
+        "--model", "claude-haiku-5-5", "--strict-mcp-config",
         # No settings files: your own allow rules (ssh, sshpass, MCP tools) would otherwise apply to jobs too.
         "--setting-sources", "",
     ]  # fmt: skip
@@ -68,13 +83,16 @@ def parse_claude(stdout: str) -> tuple[str, str | None, bool]:
 @dataclass
 class Job:
     id: int
-    kind: str  # "computer" (Claude Code) or "desktop" (Codex computer use)
+    kind: str  # "computer" (Claude Code), "edit" (Claude Code writing inside `folder`) or "desktop" (Codex)
     task: str
     status: str = "running"  # running, done, failed, cancelled
     result: str = ""
     session_id: str | None = None
     started: float = field(default_factory=time.time)
     ended: float | None = None
+    folder: Path | None = None  # edit jobs: the only place they may write
+    snapshot: Path | None = None  # edit jobs: the folder as it was before
+    on_success: object = field(default=None, repr=False)  # edit jobs: e.g. reload the document
     process: subprocess.Popen | None = field(default=None, repr=False)
 
 
@@ -84,8 +102,8 @@ class Jobs:
         self._ids = itertools.count(1)
         self.on_done = lambda job: None
 
-    def start(self, kind: str, task: str, resume: str | None = None) -> Job:
-        job = Job(next(self._ids), kind, task)
+    def start(self, kind: str, task: str, resume: str | None = None, **fields) -> Job:
+        job = Job(next(self._ids), kind, task, **fields)
         self.all[job.id] = job
         threading.Thread(target=self._run, args=(job, resume), daemon=True).start()
         return job
@@ -97,8 +115,8 @@ class Jobs:
                 command = ["codex", "exec", "--skip-git-repo-check", "-s", "read-only", "-o", str(answer)]
                 command.append(DESKTOP_PROMPT.format(task=job.task))
             else:
-                command = claude_command(job.task, resume)
-            cwd = tmp if job.kind == "desktop" else Path.home()
+                command = claude_command(job.task, resume, edit=job.kind == "edit")
+            cwd = {"desktop": tmp, "edit": job.folder}.get(job.kind, Path.home())
             # stdin closed: claude -p reads any inherited input as part of the prompt.
             try:
                 job.process = subprocess.Popen(
@@ -130,6 +148,8 @@ class Jobs:
                 else:
                     job.result, job.session_id, ok = parse_claude(stdout)
                 job.status = "done" if ok else "failed"
+                if ok and job.on_success:
+                    job.on_success()
         job.ended = time.time()
         self.on_done(job)
 
@@ -163,12 +183,59 @@ def lookup(params: dict) -> str:
     return answer if ok and answer else "Não consegui encontrar a resposta agora."
 
 
+def edit_folder(path: str) -> tuple[Path | None, str]:
+    """The folder an edit job may write in: the document's own folder, if it's a sensible place to edit."""
+    target = Path(path).expanduser()
+    folder = target if target.is_dir() else target.parent
+    home = Path.home()
+    if not target.exists():
+        return None, f"Nothing at {path}"
+    if folder == home or home not in folder.parents:
+        return None, "I only edit inside a project or document folder under your home folder."
+    size = sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
+    if size > MAX_SNAPSHOT_BYTES:
+        return None, f"That folder is too big to snapshot safely ({size // 2**20} MB)."
+    return folder, ""
+
+
 def start_task(params: dict) -> str:
     kind = params.get("kind", "computer")
-    if kind not in ("computer", "desktop"):
+    if kind not in ("computer", "desktop", "edit"):
         return f"Unknown kind: {kind}"
-    job = jobs.start(kind, params["task"])
-    return f"Started task {job.id}. Its result will arrive as an update when it finishes."
+    if kind != "edit":
+        job = jobs.start(kind, params["task"])
+        return f"Started task {job.id}. Its result will arrive as an update when it finishes."
+    folder, problem = edit_folder(params.get("path", ""))
+    if not folder:
+        return problem
+    snapshot = SNAPSHOTS / f"{int(time.time())}-{folder.name}"
+    shutil.copytree(folder, snapshot)
+    reload = reload_front_app() if params.get("reload") else None
+    job = jobs.start("edit", params["task"], folder=folder, snapshot=snapshot, on_success=reload)
+    return f"Started task {job.id}, editing {folder.name}. Its result will arrive as an update when it finishes."
+
+
+def reload_front_app():
+    """Cmd+R in the app that's in front now, if it's still in front when the edit lands (the deck being presented)."""
+    app = NSWorkspace.sharedWorkspace().frontmostApplication().localizedName()
+
+    def reload():
+        if NSWorkspace.sharedWorkspace().frontmostApplication().localizedName() == app:
+            script = f'tell application "System Events" to tell process "{app}" to keystroke "r" using command down'
+            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10, check=False)
+
+    return reload
+
+
+def undo_task(params: dict) -> str:
+    job = jobs.all.get(int(params["task_id"]))
+    if not job or job.kind != "edit" or not job.snapshot or not job.snapshot.exists():
+        return "That task didn't edit anything I can undo."
+    if job.status == "running":
+        return "That task is still running; cancel it first."
+    shutil.rmtree(job.folder)
+    shutil.copytree(job.snapshot, job.folder)
+    return f"Restored {job.folder.name} to how it was before task {job.id}."
 
 
 def task_status(params: dict) -> str:
@@ -186,9 +253,13 @@ def cancel_task(params: dict) -> str:
 
 def reply_to_task(params: dict) -> str:
     job = jobs.all.get(int(params["task_id"]))
-    if not job or job.kind != "computer" or not job.session_id:
+    if not job or job.kind not in ("computer", "edit") or not job.session_id:
         return "That task can't be continued; start a new one instead."
-    follow_up = jobs.start("computer", params["message"], resume=job.session_id)
+    fields = {}
+    if job.kind == "edit":  # same folder, fresh snapshot so undo goes back one step at a time
+        fields = {"folder": job.folder, "snapshot": SNAPSHOTS / f"{int(time.time())}-{job.folder.name}"}
+        shutil.copytree(job.folder, fields["snapshot"])
+    follow_up = jobs.start(job.kind, params["message"], resume=job.session_id, **fields)
     return f"Started task {follow_up.id}, continuing task {job.id}."
 
 
@@ -212,10 +283,12 @@ SPECS = [
     {
         "name": "start_task",
         "handler": start_task,
-        "description": "Hand a longer job to a background agent and return right away. kind=computer for anything "
-        "about files on the Mac, code, git, GitHub PRs and CI, or deeper research (Claude Code). kind=desktop for "
-        "things that need clicking and typing inside apps (Codex computer use); ask permission to use the screen "
-        "first. Jobs are read-only: they can look and search but not change, send or delete.",
+        "description": "Hand a longer job to a background agent and return right away. kind=computer to look things "
+        "up: files on the Mac, code, git, GitHub PRs and CI, deeper research (Claude Code, read-only). kind=edit to "
+        "change a document or project: give path (the file or folder, e.g. from front_document); the agent may only "
+        "write inside that folder, which is snapshotted so undo_task can restore it; set reload=true when it's the "
+        "document on screen (a deck being presented). kind=desktop for clicking and typing inside apps (Codex "
+        "computer use); ask permission to use the screen first.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -223,10 +296,22 @@ SPECS = [
                     "type": "string",
                     "description": "What to do, self-contained, with every detail Vinicius gave",
                 },
-                "kind": {"type": "string", "enum": ["computer", "desktop"], "description": "Which agent runs it"},
+                "kind": {
+                    "type": "string",
+                    "enum": ["computer", "edit", "desktop"],
+                    "description": "Which agent runs it",
+                },
+                "path": {"type": "string", "description": "kind=edit only: absolute path of the file or folder"},
+                "reload": {"type": "boolean", "description": "kind=edit only: reload the front app when done"},
             },
             "required": ["task", "kind"],
         },
+    },
+    {
+        "name": "undo_task",
+        "handler": undo_task,
+        "description": "Undo an edit task: put its folder back exactly as it was before the task ran.",
+        "parameters": {**task_id_param(), "required": ["task_id"]},
     },
     {
         "name": "task_status",

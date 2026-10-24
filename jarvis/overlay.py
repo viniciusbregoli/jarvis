@@ -49,6 +49,9 @@ ACTIVITY = {
     "front_document": lambda p: "Olhando o que está na tela",
     "slide": lambda p: "Passando o slide",
     "find_files": lambda p: f"Procurando {p.get('query', '')}",
+    "browser": lambda p: {"read_page": "Lendo a página", "click": "Clicando", "switch_tab": "Trocando de aba"}.get(
+        p.get("action"), "No navegador"
+    ),
     "undo_task": lambda p: "Desfazendo",
     "start_task": lambda p: "Abrindo um agente para editar" if p.get("kind") == "edit" else "Iniciando uma tarefa",
     "task_status": lambda p: "Verificando as tarefas",

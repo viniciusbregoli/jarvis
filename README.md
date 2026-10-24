@@ -35,6 +35,10 @@ Ask in Portuguese or English; Jarvis always answers in Brazilian Portuguese, in 
 
 Jobs are read-only for now: they can look and search (files, git, GitHub, the web) but not change, send or delete anything. Claude Code jobs run in `dontAsk` mode with an allowlist and without your Claude settings files, so only that list applies and anything outside it is refused.
 
+### The HAL bar
+
+While you talk to Jarvis, a black bar with a red glow appears at the bottom of the screen: the eye pulses with Jarvis's voice, your voice shows in warm white bars and Jarvis's in red, a line says what it's doing ("Abrindo Slack", "Pesquisando..."), and background jobs show as chips with their elapsed time and a check or an X when they finish. After the conversation, if jobs are still running, it shrinks to just the chips. It never takes focus and clicks pass through it. Press Esc to end the conversation.
+
 Conversations go through Apple's voice processing (the echo cancellation FaceTime uses), so Jarvis doesn't hear itself on the laptop speakers and you can talk over it to interrupt. While it's on, macOS lowers other audio, like during a FaceTime call.
 
 First use of each asks for a macOS permission for the app running Jarvis: Accessibility (media keys), Automation for Reminders, Screen Recording (screen).

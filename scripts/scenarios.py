@@ -1,6 +1,6 @@
 """Scenario battery for the Jarvis voice agent: Portuguese phrases, each with the tool call it should trigger.
 
-    uv run python scripts/scenarios.py [--only substring] [--list] [--repeat N] [--no-sync] [--verbose]
+    uv run python scripts/scenarios.py [--only substring[,substring]] [--list] [--repeat N] [--no-sync] [--verbose]
 
 Runs against a separate ElevenLabs agent ("Jarvis scenarios") built from the live agent's CONFIG and tool specs, in
 text-only mode (no TTS, no audio) with every tool mocked: the handlers never run, each call is recorded and answered
@@ -429,7 +429,7 @@ def render(outcomes: list[Outcome]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--only", help="run only scenarios whose name contains this text")
+    parser.add_argument("--only", help="run only scenarios whose name contains this text (comma-separated for several)")
     parser.add_argument("--list", action="store_true", help="list scenarios and exit (no API calls)")
     parser.add_argument(
         "--repeat", type=int, default=1, help="run each scenario N times (the agent is not deterministic)"
@@ -442,7 +442,8 @@ def main() -> int:
 
     scenarios = parse_scenarios(args.battery.read_text())
     if args.only:
-        scenarios = [s for s in scenarios if args.only in s.name]
+        wanted = args.only.split(",")
+        scenarios = [s for s in scenarios if any(part in s.name for part in wanted)]
     if not scenarios:
         sys.exit("No scenarios match.")
     if args.list:

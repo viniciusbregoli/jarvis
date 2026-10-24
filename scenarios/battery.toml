@@ -8,9 +8,7 @@
 #   args     a literal (exact match), "re:<regex>" (searched, case-insensitive), "*" (present) or "!" (absent/false)
 #   forbid   calls that must not happen in the turn, same shape as calls
 #   reply    regex the agent's spoken reply must match; no_reply, one it must not match
-#   announce speaking before the first tool call ("Vou procurar...") fails the step unless announce = true, which
-#            the prompt asks for on slow tools (lookup, describe_screen)
-# Scenarios that expect a tool the code doesn't have yet are reported as skipped.
+#   announce speaking before the first tool call ("Vou procurar...") fails the step unless # Scenarios that expect a tool the code doesn't have yet are reported as skipped.
 
 # --- presenting -------------------------------------------------------------------------------------------------------
 
@@ -313,14 +311,11 @@ calls = ["read_clipboard"]
 name = "describe-screen"
 say = "o que tá na minha tela?"
 calls = ["describe_screen"]
-reply = "momento|instante"
-announce = true
 
 [[scenario]]
 name = "describe-screen-question"
 say = "tem algum erro aparecendo no terminal aí?"
 calls = [{ tool = "describe_screen", args = { question = "re:erro" } }]
-announce = true
 
 # --- quick questions and dev work ------------------------------------------------------------------------------------------
 
@@ -329,21 +324,17 @@ name = "weather"
 say = "como tá o tempo em São Paulo?"
 calls = [{ tool = "lookup", args = { question = "re:paulo" } }]
 forbid = ["start_task"]
-reply = "momento|instante"
-announce = true
 
 [[scenario]]
 name = "news"
 say = "teve alguma notícia importante hoje sobre a OpenAI?"
 calls = [{ tool = "lookup", args = { question = "re:openai" } }]
-announce = true
 
 [[scenario]]
 name = "dollar"
 say = "quanto tá o dólar hoje?"
 calls = [{ tool = "lookup", args = { question = "re:d[óo]lar" } }]
 forbid = ["start_task"]
-announce = true
 
 [[scenario]]
 name = "ci-of-pr"

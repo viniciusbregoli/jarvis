@@ -114,7 +114,9 @@ def test_choose_browser_prefers_the_front_one_then_zen():
 
 def test_window_label_drops_the_browser_suffix():
     assert browser.window_label("Slack | general - Zen Browser", ZEN_BROWSER) == "Slack | general"
-    assert browser.window_label("HAL 9000 \u2014 Wikipedia \u2014 Zen Browser", ZEN_BROWSER) == "HAL 9000 \u2014 Wikipedia"
+    assert (
+        browser.window_label("HAL 9000 \u2014 Wikipedia \u2014 Zen Browser", ZEN_BROWSER) == "HAL 9000 \u2014 Wikipedia"
+    )
     assert browser.window_label("Example Domain", ZEN_BROWSER) == "Example Domain"
 
 

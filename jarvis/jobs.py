@@ -5,6 +5,7 @@ which is snapshotted first so "desfaz" can put it back."""
 import itertools
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -17,6 +18,13 @@ from pathlib import Path
 from AppKit import NSWorkspace
 
 JOB_TIMEOUT = 20 * 60
+# The prompt forbids these, but the voice agent still sometimes starts a job for "apaga tudo de Downloads" or "manda
+# mensagem pro João" while saying it's on it; refuse here so it has to tell the truth. Jobs couldn't do it anyway.
+NOT_ENABLED = re.compile(
+    r"\b(apag(ar|a|ue)|delet(ar|a|e)|exclu(ir|i|a)|rm\s+-\w*r)\b"
+    r"|\b(envi(ar|a|e)|mand(ar|a|e)|send|post(ar|a|e)?|respond(er|e|a)|reply)\b.*\b(mensagem|message|e-?mail|slack|teams|whatsapp|canal|channel)",
+    re.IGNORECASE,
+)
 SNAPSHOTS = Path.home() / ".jarvis/snapshots"
 MAX_SNAPSHOT_BYTES = 300 * 1024 * 1024  # an edit job's folder is copied first; anything bigger is too broad a target
 EDIT_TOOLS = ["Edit(./**)", "Write(./**)"]  # relative to the job's folder, its working directory
@@ -243,6 +251,8 @@ def start_task(params: dict) -> str:
     if kind not in ("computer", "desktop", "edit"):
         return f"Unknown kind: {kind}"
     if kind != "edit":
+        if NOT_ENABLED.search(params["task"]):
+            return "Not started: deleting files and sending messages aren't enabled yet. Tell Vinicius that."
         job = jobs.start(kind, params["task"])
         return f"Started task {job.id}. Its result will arrive as an update when it finishes."
     folder, problem = edit_folder(params.get("path", ""))

@@ -417,3 +417,52 @@ reply = "habilitad|ainda não|disponível"
 name = "goodbye"
 say = "é isso, valeu, tchau"
 calls = ["end_call"]
+
+# --- browser ------------------------------------------------------------------------------------------------------------
+
+[[scenario]]
+name = "browser-open-site"
+say = "abre o YouTube"
+calls = [{ tool = "browser|open_app" }]
+forbid = [{ tool = "start_task", args = { kind = "desktop" } }]
+
+[[scenario]]
+name = "browser-search"
+say = "pesquisa receita de pão de queijo"
+calls = [{ tool = "browser", args = { action = "search", query = "re:p[ãa]o de queijo" } }]
+forbid = ["lookup", "start_task"]
+
+[[scenario]]
+name = "browser-switch-tab"
+say = "vai pra aba do Slack"
+calls = [{ tool = "browser", args = { action = "switch_tab", query = "re:slack" } }]
+forbid = ["open_app", "start_task"]
+
+[[scenario]]
+name = "browser-read-page"
+say = "resume essa página pra mim"
+calls = [{ tool = "browser", args = { action = "read_page" } }]
+forbid = ["describe_screen", "start_task"]
+
+[[scenario]]
+name = "browser-click"
+say = "clica em pricing"
+calls = [{ tool = "browser", args = { action = "click", text = "re:pricing" } }]
+forbid = ["start_task"]
+
+[[scenario]]
+name = "browser-close-tab"
+say = "fecha essa aba"
+calls = [{ tool = "browser", args = { action = "close_tab" } }]
+
+[[scenario]]
+name = "browser-scroll"
+say = "desce um pouco"
+calls = [{ tool = "browser", args = { action = "scroll_down" } }]
+forbid = ["slide", "media"]
+
+[[scenario]]
+name = "browser-back"
+say = "volta pra página anterior"
+calls = [{ tool = "browser", args = { action = "back" } }]
+forbid = ["slide"]

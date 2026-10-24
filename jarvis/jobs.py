@@ -34,6 +34,8 @@ JOB_PROMPT = (
     "never ask questions. You can only read and search: never try to change, send, delete or create anything; if "
     "the task needs that, say it isn't enabled yet. To find files, prefer mdfind (Spotlight), one simple query per call: never put || or && inside a query. "
     + SPOKEN_ANSWER
+    + " If you found files or folders, end with one last line starting with 'Paths:' and their full absolute paths, "
+    "separated by ' | '; Jarvis uses that line to open them and never reads it aloud."
 )
 DESKTOP_PROMPT = (
     "Use computer use to do this on the Mac: {task}\n\nNever send or post messages, buy, delete, or submit forms; if "

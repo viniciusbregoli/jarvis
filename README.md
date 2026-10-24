@@ -33,7 +33,9 @@ Ask in Portuguese or English; Jarvis always answers in Brazilian Portuguese, in 
 - **Jobs on the screen**: "abre a Calculadora e calcula 12 vezes 12" asks "posso usar a tela?" and then hands it to Codex computer use (your ChatGPT login)
 - "e aí, terminou?", "cancela a tarefa", "e quando ela foi modificada?" check, stop or continue a job
 
-Jobs are read-only for now: they can look and search (files, git, GitHub, the web) but not change, send or delete anything. Claude Code jobs run in `dontAsk` mode with an allowlist and without your Claude settings files, so only that list applies and anything outside it is refused.
+- **Edits**: "corrige o slide 4 da apresentação que eu tô apresentando" checks what's in front (Keynote, Preview, TextEdit, or the selected tab in Zen, Firefox, Chrome, Safari) and starts a Claude Code job that may write only inside that document's folder; the folder is snapshotted first, the document reloads when it's done, and "desfaz" restores the snapshot (`~/.jarvis/snapshots`)
+
+Other jobs only look and search (files, git, GitHub, the web) and can't change, send or delete anything. Claude Code jobs run in `dontAsk` mode with an allowlist and without your Claude settings files, so only that list applies and anything outside it is refused.
 
 ### The HAL bar
 

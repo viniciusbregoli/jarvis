@@ -155,6 +155,7 @@ forbid = ["start_task"]
 
 [[scenario]]
 name = "find-report-without-opening"
+results = { find_files = "1 match: /Users/x/Documents/relatorios/relatorio-ocra.pdf (used 2 days ago)" }
 say = "acha o relatório de ocra"
 calls = [{ tool = "find_files", args = { query = "re:ocra", open = "!" } }]
 forbid = ["start_task", "open_app"]
@@ -314,6 +315,7 @@ calls = ["describe_screen"]
 
 [[scenario]]
 name = "describe-screen-question"
+results = { describe_screen = "O terminal mostra um traceback: ModuleNotFoundError: No module named lz4." }
 say = "tem algum erro aparecendo no terminal aí?"
 calls = [{ tool = "describe_screen", args = { question = "re:erro" } }]
 
@@ -327,17 +329,20 @@ forbid = ["start_task"]
 
 [[scenario]]
 name = "news"
+results = { lookup = "Hoje a OpenAI anunciou um novo modelo de raciocínio e uma parceria com a Apple." }
 say = "teve alguma notícia importante hoje sobre a OpenAI?"
 calls = [{ tool = "lookup", args = { question = "re:openai" } }]
 
 [[scenario]]
 name = "dollar"
+results = { lookup = "O dólar comercial está a R$ 5,31 hoje." }
 say = "quanto tá o dólar hoje?"
 calls = [{ tool = "lookup", args = { question = "re:d[óo]lar" } }]
 forbid = ["start_task"]
 
 [[scenario]]
 name = "ci-of-pr"
+results = { lookup = "O CI do PR 19 do jarvis passou: os dois checks estão verdes." }
 say = "como tá o CI do PR 19 do jarvis?"
 calls = [{ tool = "start_task|lookup" }]
 forbid = [{ tool = "start_task", args = { kind = "desktop" } }, { tool = "start_task", args = { kind = "edit" } }]

@@ -21,6 +21,8 @@ import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from websockets.exceptions import ConnectionClosed
+
 ROOT = Path(__file__).resolve().parent.parent
 BATTERY = ROOT / "scenarios" / "battery.toml"
 SCENARIO_AGENT = "Jarvis scenarios"
@@ -48,6 +50,7 @@ DEFAULT_RESULTS = {
     "find_files": "Found it. Paths: /Users/x/Documents/roadmap-2027.key",
 }
 GENERIC_RESULT = "Done"
+SPOKE = "spoke before acting:"
 TOTALS = [("pass", "passed"), ("fail", "failed"), ("error", "errors"), ("skip", "skipped")]
 
 
@@ -62,6 +65,7 @@ class Step:
     reply: str | None = None  # regex the agent's spoken reply must match
     no_reply: str | None = None  # regex the reply must not match
     announce: bool = False  # allow speaking before the first tool call (otherwise that is a failure)
+    extra_calls: bool = False  # allow tool calls beyond the expected ones (otherwise that is a failure)
 
 
 @dataclass
@@ -96,6 +100,7 @@ def parse_step(raw: dict, where: str) -> Step:
         reply=raw.get("reply"),
         no_reply=raw.get("no_reply"),
         announce=raw.get("announce", False),
+        extra_calls=raw.get("extra_calls", False),
     )
 
 
@@ -112,7 +117,13 @@ def parse_scenarios(text: str) -> list[Scenario]:
         if "say" in raw:  # single-turn shorthand: the step fields sit on the scenario itself
             raw = {
                 **raw,
-                "step": [{k: raw[k] for k in ("say", "calls", "forbid", "reply", "no_reply", "announce") if k in raw}],
+                "step": [
+                    {
+                        k: raw[k]
+                        for k in ("say", "calls", "forbid", "reply", "no_reply", "announce", "extra_calls")
+                        if k in raw
+                    }
+                ],
             }
         if not raw.get("step"):
             raise ValueError(f"{name}: no steps")
@@ -147,6 +158,11 @@ def describe_call(call: dict) -> str:
     return f"{call['tool']}({args})"
 
 
+def acted(calls: list[dict]) -> bool:
+    """Whether the agent did something besides saying goodbye, whose sign-off is meant to come first."""
+    return any(call["tool"] != "end_call" for call in calls)
+
+
 def check_step(step: Step, calls: list[dict], reply: str, said_first: str = "") -> list[str]:
     """Why the step failed, as a list of problems (empty when it passed)."""
     problems = []
@@ -159,12 +175,14 @@ def check_step(step: Step, calls: list[dict], reply: str, said_first: str = "") 
         if not call_matches(want, calls[i]):
             problems.append(f"call {i + 1}: expected {describe_call(want)}, got {describe_call(calls[i])}")
             break
+    if step.calls and len(calls) > len(step.calls) and not step.extra_calls:
+        problems.append(f"unexpected extra call: {describe_call(calls[len(step.calls)])}")
     for banned in step.forbid:
         for call in calls:
             if call_matches(banned, call):
                 problems.append(f"forbidden call: {describe_call(call)}")
-    if calls and said_first and not step.announce:
-        problems.append(f"spoke before acting: {said_first!r}")
+    if acted(calls) and said_first and not step.announce:
+        problems.append(f"{SPOKE} {said_first!r}")
     if step.reply and not re.search(step.reply, reply, re.IGNORECASE):
         problems.append(f"reply should match /{step.reply}/")
     if step.no_reply and re.search(step.no_reply, reply, re.IGNORECASE):
@@ -255,10 +273,11 @@ class TurnResult:
     calls: list[dict] = field(default_factory=list)
     replies: list[str] = field(default_factory=list)
     said_first: list[str] = field(default_factory=list)  # what the agent said before its first tool call
+    ended: bool = False  # the agent hung up (end_call), so the conversation can't go on
 
     @property
     def announced(self) -> bool:
-        return bool(self.calls and self.said_first)
+        return acted(self.calls) and bool(self.said_first)
 
     @property
     def reply(self) -> str:
@@ -285,6 +304,10 @@ def run_turn(ws, text: str, results: dict[str, str], verbose: bool = False) -> T
     while time.monotonic() - started < TURN_TIMEOUT:
         try:
             message = json.loads(ws.recv(timeout=0.5))
+        except ConnectionClosed:  # end_call is a built-in tool: it shows up as the server closing the session
+            turn.calls.append({"tool": "end_call", "args": {}})
+            turn.ended = True
+            break
         except TimeoutError:
             quiet = time.monotonic() - last_event
             if replied and quiet > SETTLE_SECONDS or waiting_tool and quiet > TOOL_WAIT_SECONDS:
@@ -348,6 +371,8 @@ def run_scenario(client, agent_id: str, scenario: Scenario, verbose: bool = Fals
             outcome.turns.append(turn)
             problems = check_step(step, turn.calls, turn.reply, " ".join(turn.said_first))
             prefix = f"step {i}: " if len(scenario.steps) > 1 else ""
+            if turn.ended and i < len(scenario.steps):
+                problems.append("the agent ended the conversation before the next step")
             outcome.problems += [prefix + p for p in problems]
             if problems:
                 break  # later steps depend on this one having gone right
@@ -400,9 +425,11 @@ def render(outcomes: list[Outcome]) -> str:
             lines.append(f"  agent {i}: {turn.reply or '(silence)'}")
     count = {s: sum(o.status == s for o in outcomes) for s in ("pass", "fail", "error", "skip")}
     credits = sum(o.credits for o in outcomes)
+    talk_only = [o for o in outcomes if o.status == "fail" and all(SPOKE in p for p in o.problems)]
     totals = ", ".join(f"{count[status]} {label}" for status, label in TOTALS)
     lines += ["", f"{totals} of {len(outcomes)}; {credits} credits"]
-    acting = [t for o in outcomes for t in o.turns if t.calls]
+    lines.append(f"{len(talk_only)} of the failures are only about speaking before acting")
+    acting = [t for o in outcomes for t in o.turns if acted(t.calls)]
     if acting:
         talked = sum(t.announced for t in acting)
         lines.append(f"Spoke before the first tool call in {talked} of {len(acting)} turns that used a tool")
@@ -441,6 +468,7 @@ def main() -> int:
     specs = load_specs()
     agent_id = find_scenario_agent(client) if args.no_sync else sync_scenario_agent(client, specs)
     available = {spec["name"] for spec in specs} if not args.no_sync else available_tools(client, agent_id)
+    available.add("end_call")  # built into the agent, not one of the client tools
     print(f'Scenario agent "{SCENARIO_AGENT}" ({agent_id}), {len(available)} tools, {len(scenarios)} scenarios')
 
     lock = threading.Lock()

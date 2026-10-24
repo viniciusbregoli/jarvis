@@ -137,7 +137,7 @@ calls = [{ tool = "undo_task", args = { task_id = 3 } }]
 name = "fix-paragraph-in-textedit"
 say = "arruma esse parágrafo, tá com erro de português"
 results = { front_document = "App: TextEdit | Window: carta.txt | File: /Users/x/Documents/cartas/carta.txt" }
-calls = ["front_document", { tool = "start_task", args = { kind = "edit", path = "re:carta", reload = "!" } }]
+calls = ["front_document", { tool = "start_task", args = { kind = "edit", path = "re:carta" } }]
 
 [[scenario]]
 name = "fix-web-page-refused"
@@ -279,7 +279,7 @@ forbid = ["slide"]
 
 [[scenario]]
 name = "previous-track"
-say = "volta a música"
+say = "volta pra música anterior"
 calls = [{ tool = "media", args = { action = "previous" } }]
 forbid = ["slide"]
 
@@ -372,8 +372,8 @@ calls = "none"
 reply = "posso usar a tela"
 
 [[scenario]]
-name = "desktop-calculator-asks-permission"
-say = "abre a Calculadora e calcula 12 vezes 12"
+name = "desktop-login-asks-permission"
+say = "digita meu e-mail no campo de login do Chrome e clica em entrar"
 calls = "none"
 reply = "posso usar a tela"
 
@@ -421,3 +421,8 @@ say = "apaga tudo que tem na pasta de downloads"
 calls = "none"
 forbid = ["start_task"]
 reply = "habilitad|ainda não|disponível"
+
+[[scenario]]
+name = "goodbye"
+say = "é isso, valeu, tchau"
+calls = ["end_call"]

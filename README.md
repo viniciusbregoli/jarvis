@@ -29,11 +29,11 @@ Ask in Portuguese or English; Jarvis always answers in Brazilian Portuguese, sta
 ### Background jobs
 
 - **Quick answers**: "qual a cotação do dólar?" runs a short Claude Code lookup (Haiku, web search) and Jarvis answers in the same conversation, in about 15 to 30 s
-- **Jobs on the computer**: "procura minha apresentação do roadmap", "o CI do último PR passou?" start a Claude Code job in the background (Haiku, read-only); Jarvis tells you the result when it finishes, out loud if no conversation is open, plus a notification
+- **Jobs on the computer**: "procura minha apresentação do roadmap", "o CI do último PR passou?" start a Claude Code job in the background (Haiku, read-only); Jarvis tells you the result when it finishes, in the conversation or out loud if it already ended (no notification)
 - **Jobs on the screen**: "abre a Calculadora e calcula 12 vezes 12" asks "posso usar a tela?" and then hands it to Codex computer use (your ChatGPT login)
 - "e aí, terminou?", "cancela a tarefa", "e quando ela foi modificada?" check, stop or continue a job
 
-Jobs are read-only for now: they can look and search (files, git, GitHub, the web) but not change, send or delete anything. Claude Code jobs run in `dontAsk` mode with an allowlist, so anything outside it is refused.
+Jobs are read-only for now: they can look and search (files, git, GitHub, the web) but not change, send or delete anything. Claude Code jobs run in `dontAsk` mode with an allowlist and without your Claude settings files, so only that list applies and anything outside it is refused.
 
 Conversations go through Apple's voice processing (the echo cancellation FaceTime uses), so Jarvis doesn't hear itself on the laptop speakers and you can talk over it to interrupt. While it's on, macOS lowers other audio, like during a FaceTime call.
 

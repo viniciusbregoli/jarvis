@@ -14,6 +14,8 @@ from . import coreaudio
 from .agent import api_key, ensure_agent, greeting
 from .audio import VoiceProcessingAudio, refresh_devices, wait_for_wake_word
 from .context import SPECS as CONTEXT_SPECS
+from .deck import SPECS as DECK_SPECS
+from .files import SPECS as FILE_SPECS
 from .jobs import SPECS as JOB_SPECS
 from .jobs import jobs
 from .overlay import HALBar, activity_label
@@ -23,7 +25,7 @@ from .tools import speak
 IDLE_SECONDS = 12  # silence after Jarvis stops talking before the session closes (sessions bill per minute)
 RETRY_SECONDS = 10
 ASSETS = Path(__file__).parent.parent / "assets"
-SPECS = MAC_SPECS + CONTEXT_SPECS + JOB_SPECS
+SPECS = MAC_SPECS + DECK_SPECS + FILE_SPECS + CONTEXT_SPECS + JOB_SPECS
 # HAL's eye doubles as a status light: grey when not listening, dim red while waiting, bright red in a conversation.
 ICONS = {state: str(ASSETS / f"menubar-{state}.png") for state in ("idle", "listening", "talking")}
 

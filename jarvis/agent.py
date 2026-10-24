@@ -87,6 +87,20 @@ def api_key() -> str:
     sys.exit("ELEVEN_LABS_API_KEY is not set (env or ~/.claude/.env)")
 
 
+def tool_config(spec: dict) -> dict:
+    return {
+        "type": "client",
+        "name": spec["name"],
+        "description": spec["description"],
+        "parameters": spec["parameters"],
+        "expects_response": True,
+        "response_timeout_secs": spec.get("timeout", 20),
+        # Off: on "auto" the agent narrates before any tool it expects to be slow ("Deixa eu dar uma olhada nos
+        # slides pra você"); the soft timeout filler already covers real waits.
+        "pre_tool_speech": "off",
+    }
+
+
 def sync_tools(client: ElevenLabs, specs: list[dict]) -> list[str]:
     """Create or update each client tool in ElevenLabs and return their ids, matching on name."""
     tools = client.conversational_ai.tools
@@ -96,19 +110,7 @@ def sync_tools(client: ElevenLabs, specs: list[dict]) -> list[str]:
     }
     ids = []
     for spec in specs:
-        request = ToolRequestModel(
-            tool_config={
-                "type": "client",
-                "name": spec["name"],
-                "description": spec["description"],
-                "parameters": spec["parameters"],
-                "expects_response": True,
-                "response_timeout_secs": spec.get("timeout", 20),
-                # Off: on "auto" the agent narrates before any tool it expects to be slow ("Deixa eu dar uma olhada
-                # nos slides pra você"); the soft timeout filler already covers real waits.
-                "pre_tool_speech": "off",
-            }
-        )
+        request = ToolRequestModel(tool_config=tool_config(spec))
         tool_id = existing.get(spec["name"])
         ids.append(tools.update(tool_id, request=request).id if tool_id else tools.create(request=request).id)
     return ids

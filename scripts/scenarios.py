@@ -205,17 +205,6 @@ def load_specs() -> list[dict]:
     return SPECS
 
 
-def tool_config(spec: dict) -> dict:
-    return {
-        "type": "client",
-        "name": spec["name"],
-        "description": spec["description"],
-        "parameters": spec["parameters"],
-        "expects_response": True,
-        "response_timeout_secs": spec.get("timeout", 20),
-    }
-
-
 def scenario_config() -> dict:
     from jarvis.agent import CONFIG
 
@@ -231,6 +220,8 @@ def sync_scenario_agent(client, specs: list[dict]) -> str:
     """Create or update the scenario agent. Its tools are separate objects from the live agent's (same names, own
     ids), found through the scenario agent's own tool_ids, so the live Jarvis is never touched."""
     from elevenlabs import ToolRequestModel
+
+    from jarvis.agent import tool_config
 
     tools = client.conversational_ai.tools
     agents = client.conversational_ai.agents

@@ -48,7 +48,7 @@ WRITE_FLAGS = ["Bash(git log --output*)", "Bash(git diff --output*)", "Bash(git 
 # Coding jobs also commit and run the repo's checks, all inside their worktree. The allowlist keeps the agent itself
 # from pushing — that's publish_task, after a spoken "sim" — but the repo's own test and build commands run
 # repository-controlled code with Vinicius's credentials, so a malicious repo could still push from inside a job;
-# closing that for good needs a sandbox without push credentials.
+# closing that for good needs a sandbox without push credentials (#26).
 CODE_TOOLS = EDIT_TOOLS + [
     "Bash(git add *)", "Bash(git commit *)", "Bash(git branch -m *)", "Bash(git restore *)", "Bash(git rm *)",
     "Bash(git mv *)",

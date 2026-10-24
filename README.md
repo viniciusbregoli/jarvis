@@ -52,3 +52,15 @@ Needs `ELEVEN_LABS_API_KEY` in the environment or in `~/.claude/.env`. Each star
 ```sh
 uv run pytest
 ```
+
+## Scenario battery
+
+Portuguese phrases, each with the tool call the voice agent should make, run against the agent in text:
+
+```sh
+uv run python scripts/scenarios.py [--only name-substring] [--list] [--repeat N] [--no-sync] [--verbose]
+```
+
+It builds a separate agent, "Jarvis scenarios", from the same prompt, model and tool specs as Jarvis (the tools are imported from the code, so a new tool is covered as soon as it exists) with its own copies of the tool objects, so it never touches the live agent or its tools. Conversations are text-only (no TTS or audio, Eleven Realtime Max on the same prompt) and every tool is mocked: the call is recorded and answered with a canned result, never run. A text scenario costs roughly 20 to 80 credits, against 200 or more for a voice conversation of the same length; the run prints the total. It needs the ElevenLabs key, so it is not part of `pytest`.
+
+Scenarios live in `scenarios/battery.toml` (the header explains the format): user turns, canned tool results, the expected tool calls with key arguments, forbidden calls, and regexes for the spoken reply. Speaking before the first tool call ("Vou procurar...") fails a step unless it sets `announce = true`, and the summary counts how often it happens. Scenarios that expect a tool the code doesn't have are skipped. The agent is not deterministic (temperature 0.6), so use `--repeat 3` to see how stable a failure is.

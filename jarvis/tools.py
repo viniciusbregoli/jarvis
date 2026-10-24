@@ -46,7 +46,13 @@ def speak(text: str):
 
 def open_target(params: dict) -> str:
     target = params["target"].strip()
-    result = run("open", target) if "://" in target else run("open", "-a", target)
+    if target.startswith(("/", "~")):
+        path = Path(target).expanduser()
+        if not path.exists():
+            return f"Nothing at {target}"
+        result = run("open", str(path))  # files open in their default app, folders in Finder
+    else:
+        result = run("open", target) if "://" in target else run("open", "-a", target)
     return f"Couldn't open {target}: {result.stderr.strip()}" if result.returncode else f"Opened {target}"
 
 
@@ -152,10 +158,11 @@ SPECS = [
     {
         "name": "open_app",
         "handler": open_target,
-        "description": "Open or focus a Mac app by name (e.g. Slack, Spotify) or open a URL in the browser.",
+        "description": "Open or focus a Mac app by name (e.g. Slack, Spotify), open a URL in the browser, or open a "
+        "file or folder by its full path (file in its default app, folder in Finder).",
         "parameters": {
             "type": "object",
-            "properties": {"target": string("App name, or a full URL starting with https://")},
+            "properties": {"target": string("App name, a full URL starting with https://, or an absolute path")},
             "required": ["target"],
         },
     },

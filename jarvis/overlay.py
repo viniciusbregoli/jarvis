@@ -53,10 +53,13 @@ ACTIVITY = {
         p.get("action"), "No navegador"
     ),
     "undo_task": lambda p: "Desfazendo",
-    "start_task": lambda p: "Abrindo um agente para editar" if p.get("kind") == "edit" else "Iniciando uma tarefa",
+    "start_task": lambda p: {"edit": "Abrindo um agente para editar", "code": "Abrindo um agente para programar"}.get(
+        p.get("kind"), "Iniciando uma tarefa"
+    ),
     "task_status": lambda p: "Verificando as tarefas",
     "cancel_task": lambda p: "Cancelando a tarefa",
     "reply_to_task": lambda p: "Continuando a tarefa",
+    "publish_task": lambda p: "Abrindo o PR",
 }
 
 

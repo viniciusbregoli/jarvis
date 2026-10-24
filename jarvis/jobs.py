@@ -93,9 +93,9 @@ def parse_claude(stdout: str) -> tuple[str, str | None, bool]:
 
 def kill_group(process: subprocess.Popen, sig: int = signal.SIGTERM):
     """Signal a job's whole process tree. Jobs start in their own session, so the process is its group leader and
-    codex's helper processes (the ones pressing keys) are in the group too."""
-    if process.poll() is not None:  # reaped: its pid may already belong to someone else
-        return
+    codex's helper processes (the ones pressing keys) are in the group too. The group is signalled even after the
+    leader has exited, since a helper that ignored SIGTERM can outlive it; the kernel doesn't reuse a pid while a
+    group with that id still has members, and an empty group raises ProcessLookupError."""
     try:
         os.killpg(process.pid, sig)
     except ProcessLookupError:
@@ -208,7 +208,8 @@ class Jobs:
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                kill_group(process, signal.SIGKILL)
+                pass
+            kill_group(process, signal.SIGKILL)  # the leader may be gone while a helper that ignored SIGTERM isn't
 
     def describe(self, job: Job) -> str:
         minutes = int((time.time() - job.started) // 60)

@@ -9,6 +9,8 @@ from openwakeword.model import Model
 
 RATE = 16000  # mic audio for ElevenAgents and openWakeWord: 16 kHz mono int16
 OUTPUT_RATE = 44100  # what the agent sends back (agent_output_audio_format pcm_44100)
+# Eleven Realtime ignores the agent's tts speed setting and "speak faster" prompts (measured), so speed up locally.
+SPEECH_RATE = 1.15
 WAKE_FRAME = 1280  # 80 ms, openWakeWord's native chunk
 WAKE_THRESHOLD = 0.5
 DEVICE_RECHECK_SECONDS = 10
@@ -43,7 +45,12 @@ class VoiceProcessingAudio(AudioInterface):
         self.player = AV.AVAudioPlayerNode.new()
         self.engine.attachNode_(self.player)
         self.out_format = AV.AVAudioFormat.alloc().initStandardFormatWithSampleRate_channels_(OUTPUT_RATE, 1)
-        self.engine.connect_to_format_(self.player, self.engine.mainMixerNode(), self.out_format)
+        # Time-stretch keeps the pitch while playing faster.
+        stretch = AV.AVAudioUnitTimePitch.new()
+        stretch.setRate_(SPEECH_RATE)
+        self.engine.attachNode_(stretch)
+        self.engine.connect_to_format_(self.player, stretch, self.out_format)
+        self.engine.connect_to_format_(stretch, self.engine.mainMixerNode(), self.out_format)
 
         def tap(buffer, _when):
             if self.stopping:

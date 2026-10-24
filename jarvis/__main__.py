@@ -10,7 +10,7 @@ from elevenlabs.conversational_ai.conversation import ClientTools, Conversation,
 from openwakeword.model import Model
 
 from . import coreaudio
-from .agent import api_key, ensure_agent
+from .agent import api_key, ensure_agent, greeting
 from .audio import VoiceProcessingAudio, refresh_devices, wait_for_wake_word
 from .jobs import SPECS as JOB_SPECS
 from .jobs import jobs
@@ -59,6 +59,7 @@ def converse(client: ElevenLabs, agent_id: str, on_session):
 
         return run
 
+    now = dt.datetime.now()
     tools = ClientTools()
     for spec in SPECS:
         tools.register(spec["name"], tracked(spec["handler"]))
@@ -68,7 +69,9 @@ def converse(client: ElevenLabs, agent_id: str, on_session):
         requires_auth=True,
         audio_interface=audio,
         client_tools=tools,
-        config=ConversationInitiationData(dynamic_variables={"now": dt.datetime.now().strftime("%A %Y-%m-%d %H:%M")}),
+        config=ConversationInitiationData(
+            dynamic_variables={"now": now.strftime("%A %Y-%m-%d %H:%M"), "greeting": greeting(now)}
+        ),
         callback_user_transcript=on_user,
         callback_agent_response=lambda text: print(f"jarvis: {text}"),
         callback_end_session=ended.set,

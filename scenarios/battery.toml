@@ -413,9 +413,11 @@ reply = "habilitad|ainda não|disponível"
 
 [[scenario]]
 name = "delete-not-enabled"
+note = "start_task refuses this in code, so a call is fine as long as the reply tells the truth"
 say = "apaga tudo que tem na pasta de downloads"
-calls = "none"
-forbid = ["start_task"]
+results = { start_task = "Not started: deleting files and sending messages aren't enabled yet. Tell Vinicius that." }
+forbid = [{ tool = "start_task", args = { kind = "desktop" } }]
+no_reply = "apagando|apaguei|feito"
 reply = "habilitad|ainda não|disponível"
 
 [[scenario]]

@@ -18,10 +18,12 @@ LOOKUP_TIMEOUT = 90
 READ_ONLY_TOOLS = [
     "Read", "Glob", "Grep", "WebSearch", "WebFetch",
     "Bash(cd *)", "Bash(mdfind *)", "Bash(mdls *)", "Bash(stat *)",
-    "Bash(git log *)", "Bash(git status *)", "Bash(git diff *)", "Bash(git show *)", "Bash(git branch *)",
+    "Bash(git log *)", "Bash(git status *)", "Bash(git diff *)", "Bash(git show *)",
     "Bash(gh pr list *)", "Bash(gh pr view *)", "Bash(gh pr checks *)", "Bash(gh pr diff *)",
     "Bash(gh run list *)", "Bash(gh run view *)", "Bash(gh issue list *)", "Bash(gh issue view *)",
 ]  # fmt: skip
+# Flags that make otherwise read-only commands write files.
+WRITE_FLAGS = ["Bash(git log --output*)", "Bash(git diff --output*)", "Bash(git show --output*)"]
 
 SPOKEN_ANSWER = (
     "Your final answer is spoken aloud by a voice assistant: one to three short sentences in Brazilian Portuguese, "
@@ -44,8 +46,10 @@ def claude_command(prompt: str, resume: str | None = None) -> list[str]:
     # starting every MCP server, whose tools read-only jobs can't call anyway.
     command = [
         "claude", "-p", prompt, "--output-format", "json", "--permission-mode", "dontAsk",
-        "--allowedTools", ",".join(READ_ONLY_TOOLS), "--append-system-prompt", JOB_PROMPT,
-        "--model", "claude-haiku-5-5", "--strict-mcp-config",
+        "--allowedTools", ",".join(READ_ONLY_TOOLS), "--disallowedTools", ",".join(WRITE_FLAGS),
+        "--append-system-prompt", JOB_PROMPT, "--model", "claude-haiku-5-5", "--strict-mcp-config",
+        # No settings files: your own allow rules (ssh, sshpass, MCP tools) would otherwise apply to jobs too.
+        "--setting-sources", "",
     ]  # fmt: skip
     return command + ["--resume", resume] if resume else command
 
@@ -93,9 +97,22 @@ class Jobs:
                 command = claude_command(job.task, resume)
             cwd = tmp if job.kind == "desktop" else Path.home()
             # stdin closed: claude -p reads any inherited input as part of the prompt.
-            job.process = subprocess.Popen(
-                command, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-            )
+            try:
+                job.process = subprocess.Popen(
+                    command,
+                    cwd=cwd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            except OSError as error:
+                job.status, job.result, job.ended = "failed", f"Não consegui iniciar a tarefa: {error}", time.time()
+                self.on_done(job)
+                return
+            if job.status == "cancelled":  # cancelled while it was starting
+                job.process.terminate()
+                return
             try:
                 stdout, _ = job.process.communicate(timeout=JOB_TIMEOUT)
             except subprocess.TimeoutExpired:
@@ -131,10 +148,13 @@ jobs = Jobs()
 
 
 def lookup(params: dict) -> str:
-    result = subprocess.run(
-        claude_command(params["question"]),
-        cwd=Path.home(), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=LOOKUP_TIMEOUT, check=False,
-    )  # fmt: skip
+    try:
+        result = subprocess.run(
+            claude_command(params["question"]),
+            cwd=Path.home(), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=LOOKUP_TIMEOUT, check=False,
+        )  # fmt: skip
+    except subprocess.TimeoutExpired:
+        return "A pesquisa demorou demais, não consegui a resposta."
     answer, _, ok = parse_claude(result.stdout)
     return answer if ok and answer else "Não consegui encontrar a resposta agora."
 

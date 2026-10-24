@@ -1,4 +1,5 @@
 import datetime as dt
+import signal
 import threading
 import time
 from pathlib import Path
@@ -109,9 +110,15 @@ class JarvisApp(rumps.App):
         self.session = None  # (conversation, quiet, audio) while one is live, so finished jobs can report into it
         self.bar = HALBar(jobs, ASSETS / "menubar-talking.png")
         self.bar.on_escape = self.end_conversation
+        self.bar.on_user_escape = self.cancel_desktop_jobs
         jobs.on_done = self.job_done
         self.client = ElevenLabs(api_key=api_key())  # exits here, on the main thread, when the key is missing
-        self.menu = [self.status_item, rumps.MenuItem("Talk now", callback=self.talk_now), self.mic_menu]
+        self.menu = [
+            self.status_item,
+            rumps.MenuItem("Talk now", callback=self.talk_now),
+            rumps.MenuItem("Cancel all jobs", callback=self.cancel_all_jobs),
+            self.mic_menu,
+        ]
         threading.Thread(target=self.voice_loop, daemon=True).start()
 
     # AppKit must only be touched from the main thread, so the voice thread just sets self.status.
@@ -149,6 +156,14 @@ class JarvisApp(rumps.App):
         if session := self.session:
             # Off the main thread: ending waits for the sign-off to finish playing.
             threading.Thread(target=session[0].end_session, daemon=True).start()
+
+    def cancel_desktop_jobs(self):
+        if ids := jobs.cancel_all("desktop"):
+            print(f"esc: cancelled desktop jobs {ids}")
+
+    def cancel_all_jobs(self, _):
+        if ids := jobs.cancel_all():
+            print(f"menu: cancelled jobs {ids}")
 
     def job_done(self, job):
         # Injected while Jarvis is mid-sentence, the update interrupts it and the answer's audio gets lost, so wait
@@ -204,5 +219,14 @@ class JarvisApp(rumps.App):
                 time.sleep(RETRY_SECONDS)
 
 
+def quit_on_sigterm(*_):
+    """Jobs run in their own sessions, so they outlive Jarvis unless it stops them first. The handler runs on the main
+    thread whenever Python next gets control, which the 30 fps animate timer guarantees."""
+    jobs.shutdown()
+    rumps.quit_application()
+
+
 if __name__ == "__main__":
+    rumps.events.before_quit(jobs.shutdown)  # the menu's Quit button
+    signal.signal(signal.SIGTERM, quit_on_sigterm)
     JarvisApp().run()

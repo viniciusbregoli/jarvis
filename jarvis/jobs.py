@@ -72,6 +72,11 @@ YES = re.compile(
 )
 NOT_YES = re.compile(r"\b(não|nao|nope|deixa|depois|later)\b", re.IGNORECASE)
 PR_WORDS = re.compile(r"\bpr\b|pull request|pê err|pê-err", re.IGNORECASE)
+PUBLISH_REQUEST = re.compile(
+    r"\b(abre|abra|abrir|publica|publique|publicar|manda|atualiza|atualize|atualizar|open|publish|update|push)\b"
+    r"[^.?!\n]{0,30}\b(?:pr\b|pull request)",
+    re.IGNORECASE,
+)
 TASK_WORDS = re.compile(r"\b(?:tarefa|task)\s+#?(\d+)", re.IGNORECASE)
 
 SPOKEN_ANSWER = (
@@ -439,21 +444,21 @@ def reply_to_task(params: dict) -> str:
 
 def note_utterance(user: str, jarvis_last: str = "") -> bool:
     """Arm publish_task for a coding job from the trusted speech transcripts: a yes right after Jarvis asked about the
-    PR, or the user naming it later ("abre o PR"), even in a new conversation. Tool results and everything the agent
-    says are model text, so they can never arm it — only what Vinicius actually said can."""
+    PR, or the user asking for it later ("abre o PR"), even in a new conversation. Tool results and everything the
+    agent says are model text, so they can never arm it — only what Vinicius actually said can."""
+    candidates = [j for j in list(jobs.all.values()) if j.kind == "code" and j.commits]
     job = None
     if number := TASK_WORDS.search(user):
         found = jobs.all.get(int(number.group(1)))
-        job = found if found and found.kind == "code" and found.commits else None
-    if job is None:
-        job = max(
-            (j for j in list(jobs.all.values()) if j.kind == "code" and j.commits), key=lambda j: j.id, default=None
-        )
+        job = found if found in candidates else None
+    if job is None and candidates:
+        job = max(candidates, key=lambda j: (j.asked, j.id))  # the yes belongs to whoever asked last, not the newest
     if not job:
         return False
-    said_yes = YES.search(user) and not NOT_YES.search(user)
-    asked_lately = 0 < time.time() - job.asked < APPROVAL_TTL
-    if PR_WORDS.search(user) or (said_yes and asked_lately and PR_WORDS.search(jarvis_last)):
+    denied = NOT_YES.search(user)
+    said_yes = not denied and YES.search(user)
+    asked_publish = not denied and PUBLISH_REQUEST.search(user)
+    if asked_publish or (said_yes and 0 < time.time() - job.asked < APPROVAL_TTL and PR_WORDS.search(jarvis_last)):
         job.approved = time.time()
         return True
     return False
@@ -462,9 +467,11 @@ def note_utterance(user: str, jarvis_last: str = "") -> bool:
 def publish_task(params: dict) -> str:
     if task_id := params.get("task_id"):
         job = jobs.all.get(int(task_id))
-    else:  # "abre o PR": the latest coding job that committed something
+    else:  # "abre o PR": the task that asked about it last, else the latest coding job that committed something
         job = max(
-            (j for j in list(jobs.all.values()) if j.kind == "code" and j.commits), key=lambda j: j.id, default=None
+            (j for j in list(jobs.all.values()) if j.kind == "code" and j.commits),
+            key=lambda j: (j.asked, j.id),
+            default=None,
         )
     if not job or job.kind != "code":
         return "There's no coding task to publish."

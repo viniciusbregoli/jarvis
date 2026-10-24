@@ -370,5 +370,40 @@ def test_note_utterance_arms_the_latest_coding_job(monkeypatch):
     assert fake.all[2].approved > 0
     assert note_utterance("abre o pr da tarefa 1", "")
     assert fake.all[1].approved > 0
-    for text, reply in (("não", ask), ("deixa pra depois", ask), ("sim", "Fechado."), ("quem é você?", ask)):
+    for text, reply in (
+        ("não", ask),
+        ("deixa pra depois", ask),
+        ("sim", "Fechado."),
+        ("quem é você?", ask),
+        ("não abre o pr", ""),  # naming the PR only counts as an affirmative request
+        ("qual é o pr?", ask),
+        ("abriu o pr?", ask),
+    ):
         assert not note_utterance(text, reply)
+
+
+def test_the_yes_binds_to_the_task_that_asked_and_publish_picks_the_same_one(monkeypatch, tmp_path):
+    fake = Jobs()
+    fake.all = {
+        1: Job(
+            1,
+            "code",
+            "a",
+            status="done",
+            commits=1,
+            folder=tmp_path,
+            base="main",
+            pr_title="Fix: a",
+            asked=time.time() - 5,
+        ),
+        2: Job(2, "code", "b", status="done", commits=1, folder=tmp_path / "two", base="main", pr_title="Fix: b"),
+    }
+    monkeypatch.setattr(jobs_module, "jobs", fake)
+    assert note_utterance("sim", "Tarefa 1 terminou. Quer que eu abra o PR?")
+    assert fake.all[1].approved > 0 and fake.all[2].approved == 0  # task 2 committed more recently but never asked
+    fake.all[1].approved = 0
+    assert note_utterance("abre o pr", "")  # without a task number, both paths must land on the same task
+    published = []
+    monkeypatch.setattr(code, "publish", lambda *args: published.append(args) or "https://github.com/v/j/pull/9")
+    assert publish_task({}) == "Published task 1: https://github.com/v/j/pull/9"
+    assert published == [(tmp_path, "main", "Fix: a", "")]

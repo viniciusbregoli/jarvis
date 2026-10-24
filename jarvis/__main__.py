@@ -12,28 +12,45 @@ from openwakeword.model import Model
 from . import coreaudio
 from .agent import api_key, ensure_agent
 from .audio import VoiceProcessingAudio, refresh_devices, wait_for_wake_word
-from .tools import SPECS
+from .jobs import SPECS as JOB_SPECS
+from .jobs import jobs
+from .tools import SPECS as MAC_SPECS
+from .tools import announce, notify
 
 IDLE_SECONDS = 12  # silence after Jarvis stops talking before the session closes (sessions bill per minute)
 RETRY_SECONDS = 10
 ASSETS = Path(__file__).parent.parent / "assets"
+SPECS = MAC_SPECS + JOB_SPECS
 # HAL's eye doubles as a status light: grey when not listening, dim red while waiting, bright red in a conversation.
 ICONS = {state: str(ASSETS / f"menubar-{state}.png") for state in ("idle", "listening", "talking")}
 
 
-def converse(client: ElevenLabs, agent_id: str):
+def converse(client: ElevenLabs, agent_id: str, on_session):
     audio = VoiceProcessingAudio()
     ended = threading.Event()
     last_user = time.monotonic()
+    busy = 0  # tool calls in flight; a lookup can take 30 s and the session must not close under it
 
     def on_user(text):
         nonlocal last_user
         last_user = time.monotonic()
         print(f"you: {text}")
 
+    def tracked(handler):
+        def run(params):
+            nonlocal busy, last_user
+            busy += 1
+            try:
+                return handler(params)
+            finally:
+                busy -= 1
+                last_user = time.monotonic()
+
+        return run
+
     tools = ClientTools()
     for spec in SPECS:
-        tools.register(spec["name"], spec["handler"])
+        tools.register(spec["name"], tracked(spec["handler"]))
     conversation = Conversation(
         client,
         agent_id,
@@ -46,10 +63,14 @@ def converse(client: ElevenLabs, agent_id: str):
         callback_end_session=ended.set,
     )
     conversation.start_session()
-    while not ended.wait(1):
-        if time.monotonic() - max(last_user, audio.last_played) > IDLE_SECONDS:
-            conversation.end_session()
-    conversation.wait_for_session_end()
+    on_session(conversation)
+    try:
+        while not ended.wait(1):
+            if not busy and time.monotonic() - max(last_user, audio.last_played) > IDLE_SECONDS:
+                conversation.end_session()
+        conversation.wait_for_session_end()
+    finally:
+        on_session(None)
 
 
 class JarvisApp(rumps.App):
@@ -62,6 +83,8 @@ class JarvisApp(rumps.App):
         self.talk_requested = False
         self.shown_mics: dict[str, int] = {}  # menu label -> CoreAudio device id
         self.mic_menu = rumps.MenuItem("Microphone")
+        self.conversation = None  # the live session, so finished jobs can report into it
+        jobs.on_done = self.job_done
         self.client = ElevenLabs(api_key=api_key())  # exits here, on the main thread, when the key is missing
         self.menu = [self.status_item, rumps.MenuItem("Talk now", callback=self.talk_now), self.mic_menu]
         threading.Thread(target=self.voice_loop, daemon=True).start()
@@ -81,6 +104,21 @@ class JarvisApp(rumps.App):
                 self.mic_menu.add(rumps.MenuItem(label, callback=self.pick_mic))
             self.shown_mics = mics
         self.show_mic()
+
+    def set_conversation(self, conversation):
+        self.conversation = conversation
+
+    def job_done(self, job):
+        outcome = "terminou" if job.status == "done" else "falhou"
+        notify(f"Tarefa {job.id} {outcome}: {job.result}")
+        if conversation := self.conversation:
+            # A contextual update would only be read on the next turn; a message makes the agent say it now.
+            conversation.send_user_message(
+                f"[Automatic update, not Vinicius speaking] Background task {job.id} ({job.task}) {job.status}. "
+                f"Result: {job.result}"
+            )
+        else:
+            announce(f"Senhor, a tarefa {job.id} {outcome}. {job.result}")
 
     def talk_now(self, _):
         self.talk_requested = True
@@ -113,7 +151,7 @@ class JarvisApp(rumps.App):
                     continue
                 self.talk_requested = False
                 self.status = ("talking", "In conversation")
-                converse(self.client, agent_id)
+                converse(self.client, agent_id, self.set_conversation)
             except Exception as error:  # noqa: BLE001
                 # A dropped network or mic shouldn't kill the thread while the icon still says "running".
                 self.status = ("idle", f"Error, retrying: {error}"[:80])

@@ -4,7 +4,10 @@ which is snapshotted first so "desfaz" can put it back."""
 
 import itertools
 import json
+import os
+import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -15,10 +18,18 @@ from pathlib import Path
 from AppKit import NSWorkspace
 
 JOB_TIMEOUT = 20 * 60
+# The prompt forbids these, but the voice agent still sometimes starts a job for "apaga tudo de Downloads" or "manda
+# mensagem pro João" while saying it's on it; refuse here so it has to tell the truth. Jobs couldn't do it anyway.
+NOT_ENABLED = re.compile(
+    r"\b(apag(ar|a|ue)|delet(ar|a|e)|exclu(ir|i|a)|rm\s+-\w*r)\b"
+    r"|\b(envi(ar|a|e)|mand(ar|a|e)|send|post(ar|a|e)?|respond(er|e|a)|reply)\b.*\b(mensagem|message|e-?mail|slack|teams|whatsapp|canal|channel)",
+    re.IGNORECASE,
+)
 SNAPSHOTS = Path.home() / ".jarvis/snapshots"
 MAX_SNAPSHOT_BYTES = 300 * 1024 * 1024  # an edit job's folder is copied first; anything bigger is too broad a target
 EDIT_TOOLS = ["Edit(./**)", "Write(./**)"]  # relative to the job's folder, its working directory
 LOOKUP_TIMEOUT = 90
+KILL_GRACE = 5  # seconds a cancelled job gets to exit on SIGTERM before its whole process group is SIGKILLed
 
 # Read and search only. Claude Code also allows commands it classifies as read-only (ls, cat, date) on its own;
 # in dontAsk mode everything else is refused.
@@ -80,6 +91,25 @@ def parse_claude(stdout: str) -> tuple[str, str | None, bool]:
     return (data.get("result") or "").strip(), data.get("session_id"), not data.get("is_error")
 
 
+def kill_group(process: subprocess.Popen, sig: int = signal.SIGTERM):
+    """Signal a job's whole process tree. Jobs start in their own session, so the process is its group leader and
+    codex's helper processes (the ones pressing keys) are in the group too. The group is signalled even after the
+    leader has exited, since a helper that ignored SIGTERM can outlive it; the kernel doesn't reuse a pid while a
+    group with that id still has members, and an empty group raises ProcessLookupError."""
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def stop(process: subprocess.Popen):
+    """SIGTERM the process tree now and SIGKILL it if anything is still alive after KILL_GRACE."""
+    kill_group(process)
+    timer = threading.Timer(KILL_GRACE, kill_group, (process, signal.SIGKILL))
+    timer.daemon = True
+    timer.start()
+
+
 @dataclass
 class Job:
     id: int
@@ -126,18 +156,20 @@ class Jobs:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    start_new_session=True,
                 )
             except OSError as error:
                 job.status, job.result, job.ended = "failed", f"Não consegui iniciar a tarefa: {error}", time.time()
                 self.on_done(job)
                 return
             if job.status == "cancelled":  # cancelled while it was starting
-                job.process.terminate()
+                stop(job.process)
                 return
             try:
                 stdout, _ = job.process.communicate(timeout=JOB_TIMEOUT)
             except subprocess.TimeoutExpired:
-                job.process.kill()
+                kill_group(job.process, signal.SIGKILL)
+                job.process.wait()
                 job.status, job.result = "failed", "Demorou mais de 20 minutos e foi interrompida."
             else:
                 if job.status == "cancelled":
@@ -159,8 +191,25 @@ class Jobs:
             return False
         job.status, job.ended = "cancelled", time.time()
         if job.process:
-            job.process.terminate()
+            stop(job.process)
         return True
+
+    def cancel_all(self, kind: str | None = None) -> list[int]:
+        """Cancel every running job, or only those of one kind. Returns the cancelled ids."""
+        ids = [job.id for job in list(self.all.values()) if job.status == "running" and kind in (None, job.kind)]
+        return [job_id for job_id in ids if self.cancel(job_id)]
+
+    def shutdown(self):
+        """Cancel everything and give the process trees a moment to die: Jarvis is about to exit, and the jobs run in
+        their own sessions, so they would outlive it."""
+        processes = [job.process for job in self.all.values() if job.process and job.process.poll() is None]
+        self.cancel_all()
+        for process in processes:
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+            kill_group(process, signal.SIGKILL)  # the leader may be gone while a helper that ignored SIGTERM isn't
 
     def describe(self, job: Job) -> str:
         minutes = int((time.time() - job.started) // 60)
@@ -203,6 +252,8 @@ def start_task(params: dict) -> str:
     if kind not in ("computer", "desktop", "edit"):
         return f"Unknown kind: {kind}"
     if kind != "edit":
+        if NOT_ENABLED.search(params["task"]):
+            return "Not started: deleting files and sending messages aren't enabled yet. Tell Vinicius that."
         job = jobs.start(kind, params["task"])
         return f"Started task {job.id}. Its result will arrive as an update when it finishes."
     folder, problem = edit_folder(params.get("path", ""))
@@ -247,7 +298,10 @@ def task_status(params: dict) -> str:
 
 
 def cancel_task(params: dict) -> str:
-    task_id = int(params["task_id"])
+    if not (task_id := params.get("task_id")):
+        ids = jobs.cancel_all()
+        return f"Cancelled tasks {', '.join(map(str, ids))}." if ids else "No tasks were running."
+    task_id = int(task_id)
     return f"Cancelled task {task_id}." if jobs.cancel(task_id) else f"Task {task_id} isn't running."
 
 
@@ -322,8 +376,9 @@ SPECS = [
     {
         "name": "cancel_task",
         "handler": cancel_task,
-        "description": "Stop a running background task.",
-        "parameters": {**task_id_param(), "required": ["task_id"]},
+        "description": "Stop a running background task by number. Without a number, stops every running task: use "
+        "it for 'para tudo' or 'cancela tudo', or when Vinicius wants whatever is happening on screen to stop.",
+        "parameters": task_id_param("Optional task number; omit to stop all running tasks"),
     },
     {
         "name": "reply_to_task",

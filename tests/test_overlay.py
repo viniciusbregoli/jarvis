@@ -1,5 +1,5 @@
 from jarvis.jobs import Job
-from jarvis.overlay import activity_label, job_label, visible_jobs
+from jarvis.overlay import activity_label, is_user_key, job_label, visible_jobs
 
 
 def test_activity_labels_name_the_tool_in_portuguese():
@@ -19,3 +19,15 @@ def test_finished_jobs_stay_visible_for_a_few_seconds():
     recent = Job(2, "computer", "b", status="done", ended=100.0)
     old = Job(3, "computer", "c", status="failed", ended=50.0)
     assert visible_jobs([running, recent, old], now=103.0) == [running, recent]
+
+
+def test_only_events_without_a_source_process_count_as_the_user():
+    assert is_user_key(0) is True
+    assert is_user_key(4242) is False
+
+
+def test_cancelled_jobs_get_a_cross_and_stay_visible_briefly():
+    cancelled = Job(1, "desktop", "passar slides", status="cancelled", started=0.0, ended=65.0)
+    assert job_label(cancelled, now=999.0) == "✕ passar slides · 1:05"
+    assert visible_jobs([cancelled], now=68.0) == [cancelled]
+    assert visible_jobs([cancelled], now=80.0) == []

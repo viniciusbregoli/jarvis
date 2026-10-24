@@ -43,3 +43,44 @@ def test_cancel_only_running_tasks():
     assert fake.cancel(1) is False
     fake.all[2] = Job(2, "computer", "y")
     assert fake.cancel(2) is True and fake.all[2].status == "cancelled"
+
+
+def test_claude_command_ignores_settings_files_and_blocks_write_flags():
+    command = claude_command("x")
+    assert command[command.index("--setting-sources") + 1] == ""
+    assert "Bash(git log --output*)" in command[command.index("--disallowedTools") + 1]
+    assert not any("git branch" in rule for rule in command[command.index("--allowedTools") + 1].split(","))
+
+
+def test_a_job_that_cannot_start_is_reported_failed(monkeypatch):
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("claude")
+
+    monkeypatch.setattr(jobs_module.subprocess, "Popen", missing)
+    fake, finished = Jobs(), []
+    fake.on_done = finished.append
+    job = Job(1, "computer", "x")
+    fake._run(job, None)
+    assert job.status == "failed" and job.ended and finished == [job]
+
+
+def test_a_job_cancelled_while_starting_is_killed(monkeypatch):
+    class Process:
+        terminated = False
+
+        def terminate(self):
+            Process.terminated = True
+
+    fake = Jobs()
+    job = Job(1, "computer", "x", status="cancelled")
+    monkeypatch.setattr(jobs_module.subprocess, "Popen", lambda *a, **k: Process())
+    fake._run(job, None)
+    assert Process.terminated
+
+
+def test_lookup_answers_even_when_it_times_out(monkeypatch):
+    def slow(*args, **kwargs):
+        raise jobs_module.subprocess.TimeoutExpired("claude", 90)
+
+    monkeypatch.setattr(jobs_module.subprocess, "run", slow)
+    assert "demorou" in jobs_module.lookup({"question": "x"})

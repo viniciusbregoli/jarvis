@@ -2,6 +2,7 @@ import os
 import signal
 import subprocess
 import time
+from types import SimpleNamespace
 
 from jarvis import jobs as jobs_module
 from jarvis.jobs import Job, Jobs, claude_command, parse_claude
@@ -175,3 +176,25 @@ def test_lookup_answers_even_when_it_times_out(monkeypatch):
 
     monkeypatch.setattr(jobs_module.subprocess, "run", slow)
     assert "demorou" in jobs_module.lookup({"question": "x"})
+
+
+def test_start_task_refuses_deleting_and_sending(monkeypatch):
+    started = []
+    monkeypatch.setattr(jobs_module.jobs, "start", lambda *args, **kwargs: started.append(args))
+    for task in [
+        "Apagar todos os arquivos da pasta Downloads. Use rm -rf ~/Downloads/*",
+        "Abrir o Slack, encontrar a conversa com João e enviar a mensagem 'vou atrasar'",
+        "Send an email to Ana saying I'm late",
+    ]:
+        assert "Not started" in jobs_module.start_task({"kind": "computer", "task": task})
+    assert not started
+
+
+def test_start_task_allows_reading_tasks(monkeypatch):
+    monkeypatch.setattr(jobs_module.jobs, "start", lambda *args, **kwargs: SimpleNamespace(id=7))
+    for task in [
+        "Procurar a apresentação do roadmap de 2027, excluindo cópias em node_modules",
+        "Ver quais mensagens novas chegaram no canal do Slack",
+        "Check the CI status of PR 19 on the jarvis repository",
+    ]:
+        assert "Started task 7" in jobs_module.start_task({"kind": "computer", "task": task})

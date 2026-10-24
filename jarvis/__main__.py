@@ -25,6 +25,17 @@ SPECS = MAC_SPECS + JOB_SPECS
 ICONS = {state: str(ASSETS / f"menubar-{state}.png") for state in ("idle", "listening", "talking")}
 
 
+class RealtimeConversation(Conversation):
+    """Eleven Realtime sends the reply after an interruption with the same event id as the interruption, and the SDK
+    drops audio with event_id <= the interruption's, so every reply after you (or a job result) cut Jarvis off went
+    silent. Keep dropping only the older audio of the interrupted answer."""
+
+    def _handle_message(self, message, ws):
+        super()._handle_message(message, ws)
+        if message.get("type") == "interruption":
+            self._last_interrupt_id -= 1
+
+
 def converse(client: ElevenLabs, agent_id: str, on_session):
     audio = VoiceProcessingAudio()
     ended = threading.Event()
@@ -51,7 +62,7 @@ def converse(client: ElevenLabs, agent_id: str, on_session):
     tools = ClientTools()
     for spec in SPECS:
         tools.register(spec["name"], tracked(spec["handler"]))
-    conversation = Conversation(
+    conversation = RealtimeConversation(
         client,
         agent_id,
         requires_auth=True,

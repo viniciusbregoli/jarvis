@@ -92,7 +92,7 @@ def as_call(raw) -> dict:
 def parse_step(raw: dict, where: str) -> Step:
     if "say" not in raw:
         raise ValueError(f"{where}: step without 'say'")
-    calls = [] if raw.get("calls") in (None, "none") else [as_call(c) for c in raw["calls"]]
+    calls = [] if raw.get("calls") in (None, "none", "any") else [as_call(c) for c in raw["calls"]]
     return Step(
         say=raw["say"],
         calls=calls,
@@ -100,7 +100,7 @@ def parse_step(raw: dict, where: str) -> Step:
         reply=raw.get("reply"),
         no_reply=raw.get("no_reply"),
         announce=raw.get("announce", False),
-        extra_calls=raw.get("extra_calls", False),
+        extra_calls=raw.get("extra_calls", raw.get("calls") == "any"),
     )
 
 
@@ -166,7 +166,7 @@ def acted(calls: list[dict]) -> bool:
 def check_step(step: Step, calls: list[dict], reply: str, said_first: str = "") -> list[str]:
     """Why the step failed, as a list of problems (empty when it passed)."""
     problems = []
-    if not step.calls and calls:
+    if not step.calls and calls and not step.extra_calls:
         problems.append(f"expected no tool call, got {describe_call(calls[0])}")
     for i, want in enumerate(step.calls):
         if i >= len(calls):

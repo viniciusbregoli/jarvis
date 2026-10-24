@@ -14,6 +14,7 @@ from .agent import api_key, ensure_agent, greeting
 from .audio import VoiceProcessingAudio, refresh_devices, wait_for_wake_word
 from .jobs import SPECS as JOB_SPECS
 from .jobs import jobs
+from .overlay import HALBar, activity_label
 from .tools import SPECS as MAC_SPECS
 from .tools import speak
 
@@ -36,7 +37,7 @@ class RealtimeConversation(Conversation):
             self._last_interrupt_id -= 1
 
 
-def converse(client: ElevenLabs, agent_id: str, on_session):
+def converse(client: ElevenLabs, agent_id: str, on_session, on_activity=lambda text: None):
     audio = VoiceProcessingAudio()
     ended = threading.Event()
     last_user = time.monotonic()
@@ -47,22 +48,24 @@ def converse(client: ElevenLabs, agent_id: str, on_session):
         last_user = time.monotonic()
         print(f"you: {text}")
 
-    def tracked(handler):
+    def tracked(name, handler):
         def run(params):
             nonlocal busy, last_user
             busy += 1
+            on_activity(activity_label(name, params))
             try:
                 return handler(params)
             finally:
                 busy -= 1
                 last_user = time.monotonic()
+                on_activity("")
 
         return run
 
     now = dt.datetime.now()
     tools = ClientTools()
     for spec in SPECS:
-        tools.register(spec["name"], tracked(spec["handler"]))
+        tools.register(spec["name"], tracked(spec["name"], spec["handler"]))
     conversation = RealtimeConversation(
         client,
         agent_id,
@@ -82,7 +85,7 @@ def converse(client: ElevenLabs, agent_id: str, on_session):
         return not audio.pending and time.monotonic() - max(last_user, audio.last_played) > 1
 
     conversation.start_session()
-    on_session((conversation, quiet))
+    on_session((conversation, quiet, audio))
     try:
         while not ended.wait(1):
             if not busy and time.monotonic() - max(last_user, audio.last_played) > IDLE_SECONDS:
@@ -102,7 +105,9 @@ class JarvisApp(rumps.App):
         self.talk_requested = False
         self.shown_mics: dict[str, int] = {}  # menu label -> CoreAudio device id
         self.mic_menu = rumps.MenuItem("Microphone")
-        self.session = None  # (conversation, quiet) while one is live, so finished jobs can report into it
+        self.session = None  # (conversation, quiet, audio) while one is live, so finished jobs can report into it
+        self.bar = HALBar(jobs, ASSETS / "menubar-talking.png")
+        self.bar.on_escape = self.end_conversation
         jobs.on_done = self.job_done
         self.client = ElevenLabs(api_key=api_key())  # exits here, on the main thread, when the key is missing
         self.menu = [self.status_item, rumps.MenuItem("Talk now", callback=self.talk_now), self.mic_menu]
@@ -124,8 +129,25 @@ class JarvisApp(rumps.App):
             self.shown_mics = mics
         self.show_mic()
 
+    @rumps.timer(1 / 30)
+    def animate(self, _):
+        self.bar.tick()
+
     def set_session(self, session):
         self.session = session
+        if session:
+            audio = session[2]
+            self.bar.levels = lambda: (audio.mic_level, audio.voice_level)
+        self.bar.talking = bool(session)
+        self.bar.activity = ""
+
+    def set_activity(self, text):
+        self.bar.activity = text
+
+    def end_conversation(self):
+        if session := self.session:
+            # Off the main thread: ending waits for the sign-off to finish playing.
+            threading.Thread(target=session[0].end_session, daemon=True).start()
 
     def job_done(self, job):
         # Injected while Jarvis is mid-sentence, the update interrupts it and the answer's audio gets lost, so wait
@@ -174,7 +196,7 @@ class JarvisApp(rumps.App):
                     continue
                 self.talk_requested = False
                 self.status = ("talking", "In conversation")
-                converse(self.client, agent_id, self.set_session)
+                converse(self.client, agent_id, self.set_session, self.set_activity)
             except Exception as error:  # noqa: BLE001
                 # A dropped network or mic shouldn't kill the thread while the icon still says "running".
                 self.status = ("idle", f"Error, retrying: {error}"[:80])

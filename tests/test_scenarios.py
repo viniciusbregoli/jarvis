@@ -55,9 +55,13 @@ def test_no_tool_step_fails_on_any_call():
     assert scn.check_step(s, [call("lookup", question="q")], "") == ["expected no tool call, got lookup(question='q')"]
 
 
-def test_calls_are_matched_in_order_and_extra_calls_are_allowed():
+def test_calls_are_matched_in_order_and_extra_calls_fail_unless_allowed():
     s = step(toml='calls = ["front_document", {tool = "start_task", args = {kind = "edit"}}]')
-    assert scn.check_step(s, [call("front_document"), call("start_task", kind="edit"), call("task_status")], "") == []
+    assert scn.check_step(s, [call("front_document"), call("start_task", kind="edit")], "") == []
+    extra = [call("front_document"), call("start_task", kind="edit"), call("task_status")]
+    assert scn.check_step(s, extra, "") == ["unexpected extra call: task_status()"]
+    lenient = step(toml='calls = ["front_document"]\nextra_calls = true')
+    assert scn.check_step(lenient, [call("front_document"), call("task_status")], "") == []
     assert "got nothing" in scn.check_step(s, [call("front_document")], "")[0]
     problems = scn.check_step(s, [call("start_task", kind="edit")], "")
     assert problems == ["call 1: expected front_document(), got start_task(kind='edit')"]
@@ -66,9 +70,11 @@ def test_calls_are_matched_in_order_and_extra_calls_are_allowed():
 def test_forbidden_calls_fail_even_after_the_expected_ones():
     s = step(toml='calls = ["slide"]\nforbid = [{tool = "start_task", args = {kind = "desktop"}}, "describe_screen"]')
     assert scn.check_step(s, [call("slide", action="next")], "") == []
-    assert scn.check_step(s, [call("slide"), call("start_task", kind="computer")], "") == []
     bad = scn.check_step(s, [call("slide"), call("start_task", kind="desktop", task="t"), call("describe_screen")], "")
-    assert len(bad) == 2 and all(p.startswith("forbidden call") for p in bad)
+    assert [p for p in bad if p.startswith("forbidden call")] == [
+        "forbidden call: start_task(kind='desktop', task='t')",
+        "forbidden call: describe_screen()",
+    ]
 
 
 def test_reply_expectations():
@@ -147,3 +153,9 @@ def test_turn_result_knows_when_it_announced():
     assert scn.TurnResult(calls=[call("media")], said_first=["Vou ver."]).announced
     assert not scn.TurnResult(calls=[call("media")]).announced
     assert not scn.TurnResult(said_first=["Oi."]).announced
+
+
+def test_goodbye_sign_off_before_end_call_is_not_announcing():
+    s = step(toml='calls = ["end_call"]')
+    assert scn.check_step(s, [call("end_call")], "Até a próxima.", "Até a próxima.") == []
+    assert not scn.TurnResult(calls=[call("end_call")], said_first=["Até a próxima."]).announced

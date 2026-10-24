@@ -1,0 +1,423 @@
+# Scenario battery for the voice agent, run by scripts/scenarios.py (see the README).
+#
+# A scenario is one user turn written on the scenario itself (say, calls, forbid, reply, no_reply) or several turns
+# as [[scenario.step]] tables. Tools are mocked: `results` sets what a tool returns (by name), anything else gets a
+# generic canned result.
+#   calls    tools the agent must call, in order, as a prefix of its calls this turn; "none" means no tool at all.
+#            An entry is "tool", "tool_a|tool_b" (either) or { tool = "x", args = { key = value } }.
+#   args     a literal (exact match), "re:<regex>" (searched, case-insensitive), "*" (present) or "!" (absent/false)
+#   forbid   calls that must not happen in the turn, same shape as calls
+#   reply    regex the agent's spoken reply must match; no_reply, one it must not match
+#   announce speaking before the first tool call ("Vou procurar...") fails the step unless announce = true, which
+#            the prompt asks for on slow tools (lookup, describe_screen)
+# Scenarios that expect a tool the code doesn't have yet are reported as skipped.
+
+# --- presenting -------------------------------------------------------------------------------------------------------
+
+[[scenario]]
+name = "slide-next"
+say = "passa o slide"
+calls = [{ tool = "slide", args = { action = "next" } }]
+forbid = ["start_task", "describe_screen", "open_app"]
+
+[[scenario]]
+name = "slide-next-plural"
+note = "the phrase that became a slow computer-use job paging the whole deck"
+say = "passa os slides"
+calls = [{ tool = "slide", args = { action = "next" } }]
+forbid = ["start_task", "describe_screen"]
+
+[[scenario]]
+name = "slide-next-bare"
+say = "próximo"
+calls = [{ tool = "slide", args = { action = "next" } }]
+forbid = ["start_task", "media"]
+
+[[scenario]]
+name = "slide-next-filler"
+say = "é... passa pro próximo aí"
+calls = [{ tool = "slide", args = { action = "next" } }]
+forbid = ["start_task", "media"]
+
+[[scenario]]
+name = "slide-previous"
+say = "volta um"
+calls = [{ tool = "slide", args = { action = "previous" } }]
+forbid = ["start_task", "media"]
+
+[[scenario]]
+name = "slide-previous-long"
+say = "volta pro slide anterior"
+calls = [{ tool = "slide", args = { action = "previous" } }]
+forbid = ["start_task", "media"]
+
+[[scenario]]
+name = "slide-goto-7"
+say = "vai pro slide 7"
+calls = [{ tool = "slide", args = { action = "goto", number = 7 } }]
+forbid = ["start_task"]
+
+[[scenario]]
+name = "slide-goto-spoken"
+say = "me leva pro slide doze"
+calls = [{ tool = "slide", args = { action = "goto", number = 12 } }]
+forbid = ["start_task"]
+
+[[scenario]]
+name = "slide-first"
+say = "volta pro começo"
+calls = [{ tool = "slide", args = { action = "first" } }]
+forbid = ["start_task", "media"]
+
+[[scenario]]
+name = "slide-last"
+say = "vai pro último slide"
+calls = [{ tool = "slide", args = { action = "last" } }]
+forbid = ["start_task"]
+
+[[scenario]]
+name = "slide-fullscreen"
+say = "coloca em tela cheia"
+calls = [{ tool = "slide", args = { action = "fullscreen" } }]
+forbid = ["start_task", "describe_screen"]
+
+[[scenario]]
+name = "slide-exit"
+say = "sai da apresentação"
+calls = [{ tool = "slide", args = { action = "exit" } }]
+forbid = ["start_task", "describe_screen"]
+
+[[scenario]]
+name = "slide-exit-filler"
+say = "é... pode fechar a apresentação, terminei"
+calls = [{ tool = "slide", args = { action = "exit" } }]
+forbid = ["start_task", "describe_screen"]
+
+# --- fixing what is on screen -------------------------------------------------------------------------------------------
+
+[[scenario]]
+name = "fix-slide-title"
+say = "corrige o slide 4, o título tá errado, devia ser Roadmap 2027"
+results = { front_document = "App: Zen | Window: Ideias para o roadmap de 2027 | File: /Users/x/deck/index.html" }
+calls = [
+  "front_document",
+  { tool = "start_task", args = { kind = "edit", path = "re:/deck", reload = true, task = "re:roadmap 2027" } },
+]
+forbid = [{ tool = "start_task", args = { kind = "desktop" } }]
+no_reply = "posso|confirma|quer que"
+
+[[scenario]]
+name = "fix-slide-mentions-number"
+say = "o slide 4 tá com o título errado, devia ser Roadmap 2027"
+results = { front_document = "App: Zen | Window: Ideias para o roadmap de 2027 | File: /Users/x/deck/index.html" }
+calls = [
+  "front_document",
+  { tool = "start_task", args = { kind = "edit", path = "re:/deck", task = "re:(slide|4).*(4|slide)" } },
+]
+
+[[scenario]]
+name = "fix-then-undo"
+results = { front_document = "App: Zen | Window: Ideias para o roadmap de 2027 | File: /Users/x/deck/index.html", start_task = "Started task 3, editing deck. Its result will arrive as an update when it finishes." }
+
+[[scenario.step]]
+say = "corrige o slide 4, o título tá errado, devia ser Roadmap 2027"
+calls = ["front_document", { tool = "start_task", args = { kind = "edit", reload = true } }]
+
+[[scenario.step]]
+say = "[Automatic update, not Vinicius speaking] Background task 3 (corrigir o título do slide 4) done. Result: Troquei o título do slide 4 para Roadmap 2027."
+calls = "none"
+reply = "."
+no_reply = "Paths"
+
+[[scenario.step]]
+say = "desfaz"
+calls = [{ tool = "undo_task", args = { task_id = 3 } }]
+
+[[scenario]]
+name = "fix-paragraph-in-textedit"
+say = "arruma esse parágrafo, tá com erro de português"
+results = { front_document = "App: TextEdit | Window: carta.txt | File: /Users/x/Documents/cartas/carta.txt" }
+calls = ["front_document", { tool = "start_task", args = { kind = "edit", path = "re:carta", reload = "!" } }]
+
+[[scenario]]
+name = "fix-web-page-refused"
+say = "corrige o título dessa página"
+results = { front_document = "App: Zen | Window: Kinebot | URL: https://www.kinebot.com.br/produto" }
+calls = ["front_document"]
+forbid = [{ tool = "start_task", args = { kind = "edit" } }]
+reply = "arquivos? locais|apenas locais|só.*locais|locais"
+
+# --- finding and opening ------------------------------------------------------------------------------------------------
+
+[[scenario]]
+name = "find-open-presentation"
+say = "abre a apresentação do roadmap de 2027"
+calls = [{ tool = "find_files", args = { query = "re:roadmap", open = true } }]
+forbid = ["start_task"]
+
+[[scenario]]
+name = "find-report-without-opening"
+say = "acha o relatório de ocra"
+calls = [{ tool = "find_files", args = { query = "re:ocra", open = "!" } }]
+forbid = ["start_task", "open_app"]
+
+[[scenario]]
+name = "find-open-folder"
+say = "abre a pasta do projeto jarvis"
+calls = [{ tool = "find_files", args = { query = "re:jarvis", kind = "re:folder|any", open = true } }]
+forbid = ["start_task"]
+
+[[scenario]]
+name = "find-presentation"
+say = "procura minha apresentação do roadmap"
+calls = [{ tool = "find_files", args = { query = "re:roadmap", open = "!" } }]
+forbid = ["start_task", "open_app"]
+
+[[scenario]]
+name = "open-app-slack"
+say = "abre o Slack"
+calls = [{ tool = "open_app", args = { target = "re:slack" } }]
+forbid = ["start_task", "find_files"]
+
+[[scenario]]
+name = "open-app-filler"
+say = "é... abre o Spotify pra mim"
+calls = [{ tool = "open_app", args = { target = "re:spotify" } }]
+forbid = ["start_task", "find_files"]
+
+[[scenario]]
+name = "open-url-github"
+say = "abre o GitHub"
+calls = [{ tool = "open_app", args = { target = "re:github" } }]
+forbid = ["start_task"]
+
+[[scenario]]
+name = "open-found-path"
+note = "the Paths line of a finished task is used to open the file, and never read aloud"
+
+[[scenario.step]]
+say = "[Automatic update, not Vinicius speaking] Background task 2 (procurar a apresentação do roadmap) done. Result: Achei a apresentação do roadmap de 2027. Paths: /Users/x/Documents/roadmap-2027.key"
+calls = "none"
+reply = "."
+no_reply = "paths|/users"
+
+[[scenario.step]]
+say = "abre ela"
+calls = [{ tool = "open_app", args = { target = "/Users/x/Documents/roadmap-2027.key" } }]
+forbid = ["start_task"]
+
+# --- background tasks ---------------------------------------------------------------------------------------------------
+
+[[scenario]]
+name = "stop-everything"
+say = "para tudo"
+calls = ["cancel_task"]
+forbid = ["start_task", "media"]
+
+[[scenario]]
+name = "cancel-the-task"
+say = "cancela a tarefa"
+calls = ["cancel_task"]
+forbid = ["start_task"]
+
+[[scenario]]
+name = "cancel-task-by-number"
+say = "cancela a tarefa quatro"
+calls = [{ tool = "cancel_task", args = { task_id = 4 } }]
+
+[[scenario]]
+name = "task-status"
+say = "e aí, terminou?"
+calls = ["task_status"]
+forbid = ["start_task"]
+
+[[scenario]]
+name = "follow-up-on-finished-task"
+results = { start_task = "Started task 1. Its result will arrive as an update when it finishes." }
+
+[[scenario.step]]
+say = "[Automatic update, not Vinicius speaking] Background task 1 (procurar o relatório de ocra) done. Result: Achei o relatório de ocra de março."
+calls = "none"
+reply = "."
+
+[[scenario.step]]
+say = "e quando ele foi modificado?"
+calls = [{ tool = "reply_to_task", args = { task_id = 1 } }]
+
+# --- Mac basics ----------------------------------------------------------------------------------------------------------
+
+[[scenario]]
+name = "volume-30"
+say = "põe o volume em trinta"
+calls = [{ tool = "media", args = { action = "volume", level = 30 } }]
+
+[[scenario]]
+name = "volume-max"
+say = "é... coloca o volume no máximo"
+calls = [{ tool = "media", args = { action = "volume", level = 100 } }]
+
+[[scenario]]
+name = "volume-status"
+say = "qual o volume agora?"
+calls = [{ tool = "media", args = { action = "status" } }]
+
+[[scenario]]
+name = "mute"
+say = "muta o som"
+calls = [{ tool = "media", args = { action = "mute" } }]
+
+[[scenario]]
+name = "unmute"
+say = "tira do mudo"
+calls = [{ tool = "media", args = { action = "unmute" } }]
+
+[[scenario]]
+name = "next-track"
+say = "pula essa música"
+calls = [{ tool = "media", args = { action = "next" } }]
+forbid = ["slide"]
+
+[[scenario]]
+name = "previous-track"
+say = "volta a música"
+calls = [{ tool = "media", args = { action = "previous" } }]
+forbid = ["slide"]
+
+[[scenario]]
+name = "pause-music"
+say = "pausa a música"
+calls = [{ tool = "media", args = { action = "play_pause" } }]
+
+[[scenario]]
+name = "next-song-english"
+say = "next song"
+calls = [{ tool = "media", args = { action = "next" } }]
+reply = "[ãõéê]|senhor|música"
+
+[[scenario]]
+name = "timer-10-minutes"
+say = "timer de dez minutos pro macarrão"
+calls = [{ tool = "set_timer", args = { seconds = 600, label = "re:macarr" } }]
+
+[[scenario]]
+name = "reminder-tomorrow-9"
+say = "me lembra amanhã às nove de ligar pra Ana"
+calls = [{ tool = "add_reminder", args = { due = "re:^2026-10-24T09:00", text = "re:ana" } }]
+
+[[scenario]]
+name = "read-clipboard"
+say = "lê o que eu copiei"
+calls = ["read_clipboard"]
+
+[[scenario]]
+name = "describe-screen"
+say = "o que tá na minha tela?"
+calls = ["describe_screen"]
+reply = "momento|instante"
+announce = true
+
+[[scenario]]
+name = "describe-screen-question"
+say = "tem algum erro aparecendo no terminal aí?"
+calls = [{ tool = "describe_screen", args = { question = "re:erro" } }]
+announce = true
+
+# --- quick questions and dev work ------------------------------------------------------------------------------------------
+
+[[scenario]]
+name = "weather"
+say = "como tá o tempo em São Paulo?"
+calls = [{ tool = "lookup", args = { question = "re:paulo" } }]
+forbid = ["start_task"]
+reply = "momento|instante"
+announce = true
+
+[[scenario]]
+name = "news"
+say = "teve alguma notícia importante hoje sobre a OpenAI?"
+calls = [{ tool = "lookup", args = { question = "re:openai" } }]
+announce = true
+
+[[scenario]]
+name = "dollar"
+say = "quanto tá o dólar hoje?"
+calls = [{ tool = "lookup", args = { question = "re:d[óo]lar" } }]
+forbid = ["start_task"]
+announce = true
+
+[[scenario]]
+name = "ci-of-pr"
+say = "como tá o CI do PR 19 do jarvis?"
+calls = [{ tool = "start_task|lookup" }]
+forbid = [{ tool = "start_task", args = { kind = "desktop" } }, { tool = "start_task", args = { kind = "edit" } }]
+
+[[scenario]]
+name = "repo-changes-today"
+say = "o que mudou no repo cosmos hoje?"
+calls = [{ tool = "start_task", args = { kind = "computer", task = "re:cosmos" } }]
+forbid = [{ tool = "start_task", args = { kind = "desktop" } }]
+
+[[scenario]]
+name = "find-in-code"
+say = "é... acha pra mim onde o jarvis define o prompt do agente"
+calls = [{ tool = "start_task", args = { kind = "computer" } }]
+forbid = [{ tool = "start_task", args = { kind = "desktop" } }]
+
+# --- clicking and typing: ask first -----------------------------------------------------------------------------------------
+
+[[scenario]]
+name = "desktop-asks-permission"
+say = "clica no botão de exportar do Figma"
+calls = "none"
+reply = "posso usar a tela"
+
+[[scenario]]
+name = "desktop-calculator-asks-permission"
+say = "abre a Calculadora e calcula 12 vezes 12"
+calls = "none"
+reply = "posso usar a tela"
+
+[[scenario]]
+name = "desktop-starts-after-yes"
+results = { start_task = "Started task 5. Its result will arrive as an update when it finishes." }
+
+[[scenario.step]]
+say = "clica no botão de exportar do Figma"
+calls = "none"
+reply = "posso usar a tela"
+
+[[scenario.step]]
+say = "pode"
+calls = [{ tool = "start_task", args = { kind = "desktop", task = "re:exportar" } }]
+
+# --- negative cases ------------------------------------------------------------------------------------------------------------
+
+[[scenario]]
+name = "chitchat"
+say = "tudo bem?"
+calls = "none"
+
+[[scenario]]
+name = "chitchat-filler"
+say = "é... e aí Jarvis, como você tá?"
+calls = "none"
+
+[[scenario]]
+name = "current-time"
+say = "que horas são?"
+calls = "none"
+reply = "14|duas|meia"
+
+[[scenario]]
+name = "slack-message-not-enabled"
+say = "manda mensagem pro João no Slack falando que eu vou atrasar dez minutos"
+calls = "none"
+forbid = ["start_task", "open_app"]
+reply = "habilitad|ainda não|disponível"
+
+[[scenario]]
+name = "delete-not-enabled"
+say = "apaga tudo que tem na pasta de downloads"
+calls = "none"
+forbid = ["start_task"]
+reply = "habilitad|ainda não|disponível"

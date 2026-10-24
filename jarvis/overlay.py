@@ -23,6 +23,7 @@ from AppKit import (
     NSShadow,
     NSView,
 )
+from Quartz import CGEventGetIntegerValueField, kCGEventSourceStateID, kCGEventSourceUnixProcessID
 
 RED = NSColor.colorWithSRGBRed_green_blue_alpha_(1.0, 0.13, 0.08, 1.0)
 DIM_RED = NSColor.colorWithSRGBRed_green_blue_alpha_(0.75, 0.12, 0.08, 1.0)
@@ -56,6 +57,12 @@ ACTIVITY = {
 
 def activity_label(tool: str, params: dict) -> str:
     return ACTIVITY.get(tool, lambda p: tool)(params)
+
+
+def is_user_key(source_pid: int) -> bool:
+    """Synthetic key events (osascript, CGEventPost, Codex's computer use) carry the posting process's pid; hardware
+    key presses are believed to carry 0. Unconfirmed on a real key press, hence the log line in HALBar._key."""
+    return source_pid == 0
 
 
 def job_label(job, now: float) -> str:
@@ -148,7 +155,8 @@ class HALBar:
         self.jobs_shown = []
         self.visible = False
         self.panel = self._make_panel()
-        self.on_escape = None
+        self.on_escape = None  # any Esc while talking
+        self.on_user_escape = None  # Esc from the keyboard, not synthesized by a desktop job
         NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(KEY_DOWN_MASK, self._key)
 
     def _make_panel(self):
@@ -166,7 +174,16 @@ class HALBar:
         return panel
 
     def _key(self, event):
-        if event.keyCode() == ESCAPE_KEY and self.talking and self.on_escape:
+        if event.keyCode() != ESCAPE_KEY:
+            return
+        cg_event = event.CGEvent()
+        pid = CGEventGetIntegerValueField(cg_event, kCGEventSourceUnixProcessID)
+        state = CGEventGetIntegerValueField(cg_event, kCGEventSourceStateID)
+        print(f"esc: source pid {pid}, state id {state}")
+        # A desktop job presses Esc in apps too: only a real key press may cancel jobs, or they would cancel themselves.
+        if is_user_key(pid) and self.on_user_escape:
+            self.on_user_escape()
+        if self.talking and self.on_escape:
             self.on_escape()
 
     def tick(self):

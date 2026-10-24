@@ -149,10 +149,46 @@ def test_a_timed_out_job_is_killed_with_its_children(monkeypatch, tmp_path):
     assert dies(int((tmp_path / "child").read_text()), spawned[0])
 
 
-def test_kill_group_ignores_a_process_that_is_already_gone():
+def test_kill_group_ignores_a_group_that_is_already_gone():
     process = subprocess.Popen(["true"], start_new_session=True)
     process.wait()
-    jobs_module.kill_group(process)  # no error, and nothing signalled
+    jobs_module.kill_group(process)  # empty group: no error
+
+
+def stubborn_helper():
+    """A job whose helper ignores SIGTERM while the leader dies on it. Returns (leader, helper pid)."""
+    script = '(trap "" TERM; exec sleep 30) & echo $!; exec sleep 30'
+    process = subprocess.Popen(["sh", "-c", script], stdout=subprocess.PIPE, text=True, start_new_session=True)
+    return process, int(process.stdout.readline())
+
+
+def gone(pid: int, timeout: float = 3) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_stop_kills_a_helper_that_outlives_its_leader(monkeypatch):
+    monkeypatch.setattr(jobs_module, "KILL_GRACE", 0.3)
+    process, helper = stubborn_helper()
+    time.sleep(0.2)  # let the helper install its trap
+    jobs_module.stop(process)
+    process.wait(timeout=2)  # the leader dies on SIGTERM right away
+    assert gone(helper)
+
+
+def test_shutdown_kills_a_helper_that_outlives_its_leader():
+    process, helper = stubborn_helper()
+    time.sleep(0.2)
+    fake = Jobs()
+    fake.all = {1: Job(1, "desktop", "a", process=process)}
+    fake.shutdown()
+    assert gone(helper, timeout=1)
 
 
 def test_cancel_task_with_and_without_an_id(monkeypatch):

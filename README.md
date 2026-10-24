@@ -17,7 +17,7 @@ Jarvis lives in the menu bar as a HAL 9000 eye that doubles as a status light: g
 
 ## What it can do
 
-Ask in Portuguese or English; Jarvis always answers in Brazilian Portuguese, starting with "Pois não, senhor?":
+Ask in Portuguese or English; Jarvis always answers in Brazilian Portuguese, in the manner of the movie J.A.R.V.I.S. (polite, terse, dry wit, "senhor"), with a custom voice and a greeting that follows the time of day:
 
 - **Open apps and URLs**: "open Slack", "abre o GitHub"
 - **Volume and music**: "volume 30", "mute", "pause the music", "next song" (media keys, so any player)
@@ -25,6 +25,19 @@ Ask in Portuguese or English; Jarvis always answers in Brazilian Portuguese, sta
 - **Reminders**: "remind me tomorrow at 5 to call Ana" goes to Apple Reminders, so it reaches your phone too
 - **Clipboard**: "read what I copied"
 - **Screen**: "what's on my screen?" takes a screenshot and has Claude describe it with every tool turned off (about 5 s, uses your Claude login)
+
+### Background jobs
+
+- **Quick answers**: "qual a cotação do dólar?" runs a short Claude Code lookup (Haiku, web search) and Jarvis answers in the same conversation, in about 15 to 30 s
+- **Jobs on the computer**: "procura minha apresentação do roadmap", "o CI do último PR passou?" start a Claude Code job in the background (Haiku, read-only); Jarvis tells you the result when it finishes, in the conversation or out loud if it already ended (no notification)
+- **Jobs on the screen**: "abre a Calculadora e calcula 12 vezes 12" asks "posso usar a tela?" and then hands it to Codex computer use (your ChatGPT login)
+- "e aí, terminou?", "cancela a tarefa", "e quando ela foi modificada?" check, stop or continue a job
+
+Jobs are read-only for now: they can look and search (files, git, GitHub, the web) but not change, send or delete anything. Claude Code jobs run in `dontAsk` mode with an allowlist and without your Claude settings files, so only that list applies and anything outside it is refused.
+
+### The HAL bar
+
+While you talk to Jarvis, a black bar with a red glow appears at the bottom of the screen: the eye pulses with Jarvis's voice, your voice shows in warm white bars and Jarvis's in red, a line says what it's doing ("Abrindo Slack", "Pesquisando..."), and background jobs show as chips with their elapsed time and a check or an X when they finish. After the conversation, if jobs are still running, it shrinks to just the chips. It never takes focus and clicks pass through it. Press Esc to end the conversation.
 
 Conversations go through Apple's voice processing (the echo cancellation FaceTime uses), so Jarvis doesn't hear itself on the laptop speakers and you can talk over it to interrupt. While it's on, macOS lowers other audio, like during a FaceTime call.
 

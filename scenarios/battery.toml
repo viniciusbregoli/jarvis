@@ -64,7 +64,7 @@ forbid = ["start_task"]
 
 [[scenario]]
 name = "slide-first"
-say = "volta pro começo"
+say = "volta pro primeiro slide"
 calls = [{ tool = "slide", args = { action = "first" } }]
 forbid = ["start_task", "media"]
 

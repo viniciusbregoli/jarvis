@@ -1,3 +1,4 @@
+import collections
 import threading
 import time
 
@@ -22,6 +23,8 @@ class VoiceProcessingAudio(AudioInterface):
 
     def __init__(self):
         self.pending = 0  # buffers scheduled but not yet played
+        self.mic_level = 0.0  # 0 to 1, for the HAL bar
+        self._voice_levels = collections.deque()  # one level per scheduled buffer; the first is the one playing
         self.stopping = False
         self._stop_lock = threading.Lock()
         self._tap_thread = None
@@ -60,6 +63,7 @@ class VoiceProcessingAudio(AudioInterface):
                 frames = buffer.frameLength()
                 # Channel 0 is the echo-cancelled voice; the others are raw mic channels.
                 voice = np.frombuffer(buffer.floatChannelData()[0].as_buffer(frames), dtype=np.float32)
+                self.mic_level = loudness(voice)
                 input_callback(to_pcm16(voice, buffer.format().sampleRate()))
             except Exception as error:  # noqa: BLE001
                 # An exception escaping here turns into an NSException inside AVFoundation and kills the app.
@@ -98,16 +102,29 @@ class VoiceProcessingAudio(AudioInterface):
         buffer.setFrameLength_(len(samples))
         np.frombuffer(buffer.floatChannelData()[0].as_buffer(len(samples)), dtype=np.float32)[:] = samples
         self.pending += 1
+        self._voice_levels.append(loudness(samples))
         self.player.scheduleBuffer_completionHandler_(buffer, self._played)
 
     def _played(self):
         self.pending -= 1
+        if self._voice_levels:
+            self._voice_levels.popleft()
         self.last_played = time.monotonic()
+
+    @property
+    def voice_level(self) -> float:
+        """How loud Jarvis is right now, 0 to 1 (the level of the buffer playing)."""
+        return self._voice_levels[0] if self._voice_levels else 0.0
 
     def interrupt(self):
         # stop() drops everything scheduled (firing each completion handler); play() readies it for new audio.
         self.player.stop()
         self.player.play()
+
+
+def loudness(samples: np.ndarray) -> float:
+    """RMS mapped to 0 to 1; speech sits around 0.02 to 0.1 RMS, so x8 makes normal talking fill most of the bar."""
+    return float(min(1.0, np.sqrt(np.mean(samples**2)) * 8)) if len(samples) else 0.0
 
 
 def to_pcm16(samples: np.ndarray, rate: float) -> bytes:

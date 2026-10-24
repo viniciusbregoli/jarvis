@@ -72,6 +72,7 @@ class Job:
     result: str = ""
     session_id: str | None = None
     started: float = field(default_factory=time.time)
+    ended: float | None = None
     process: subprocess.Popen | None = field(default=None, repr=False)
 
 
@@ -127,13 +128,14 @@ class Jobs:
                 else:
                     job.result, job.session_id, ok = parse_claude(stdout)
                 job.status = "done" if ok else "failed"
+        job.ended = time.time()
         self.on_done(job)
 
     def cancel(self, job_id: int) -> bool:
         job = self.all.get(job_id)
         if not job or job.status != "running":
             return False
-        job.status = "cancelled"
+        job.status, job.ended = "cancelled", time.time()
         if job.process:
             job.process.terminate()
         return True

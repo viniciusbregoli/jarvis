@@ -20,6 +20,9 @@ class VoiceProcessingAudio(AudioInterface):
 
     def __init__(self):
         self.pending = 0  # buffers scheduled but not yet played
+        self.stopping = False
+        self._stop_lock = threading.Lock()
+        self._tap_thread = None
         # Set here, not in start(): the SDK calls start() from its own thread after connecting, and the idle timer
         # may read this first.
         self.last_played = time.monotonic()
@@ -43,10 +46,17 @@ class VoiceProcessingAudio(AudioInterface):
         self.engine.connect_to_format_(self.player, self.engine.mainMixerNode(), self.out_format)
 
         def tap(buffer, _when):
-            frames = buffer.frameLength()
-            # Channel 0 is the echo-cancelled voice; the others are raw mic channels.
-            voice = np.frombuffer(buffer.floatChannelData()[0].as_buffer(frames), dtype=np.float32)
-            input_callback(to_pcm16(voice, buffer.format().sampleRate()))
+            if self.stopping:
+                return
+            self._tap_thread = threading.get_ident()
+            try:
+                frames = buffer.frameLength()
+                # Channel 0 is the echo-cancelled voice; the others are raw mic channels.
+                voice = np.frombuffer(buffer.floatChannelData()[0].as_buffer(frames), dtype=np.float32)
+                input_callback(to_pcm16(voice, buffer.format().sampleRate()))
+            except Exception as error:  # noqa: BLE001
+                # An exception escaping here turns into an NSException inside AVFoundation and kills the app.
+                print(f"mic callback error: {error!r}")
 
         mic.installTapOnBus_bufferSize_format_block_(0, 4096, None, tap)
         self.engine.prepare()
@@ -57,16 +67,23 @@ class VoiceProcessingAudio(AudioInterface):
         self.player.play()
 
     def stop(self):
-        if not getattr(self, "engine", None):
+        if threading.get_ident() == self._tap_thread:
+            # When the agent hangs up, the SDK stops the session from inside the mic callback; removing a tap from its
+            # own callback deadlocks or crashes, so finish on another thread.
+            threading.Thread(target=self.stop, daemon=True).start()
             return
-        # Let the sign-off finish before cutting the speaker.
-        deadline = time.monotonic() + 5
-        while self.pending and time.monotonic() < deadline:
-            time.sleep(0.1)
-        self.engine.inputNode().removeTapOnBus_(0)
-        self.engine.stop()
-        self.engine.inputNode().setVoiceProcessingEnabled_error_(False, None)
-        self.engine = None
+        with self._stop_lock:
+            if not getattr(self, "engine", None):
+                return
+            self.stopping = True
+            # Let the sign-off finish before cutting the speaker.
+            deadline = time.monotonic() + 5
+            while self.pending and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.engine.inputNode().removeTapOnBus_(0)
+            self.engine.stop()
+            self.engine.inputNode().setVoiceProcessingEnabled_error_(False, None)
+            self.engine = None
 
     def output(self, audio: bytes):
         samples = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768

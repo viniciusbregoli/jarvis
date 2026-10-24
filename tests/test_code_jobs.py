@@ -8,7 +8,17 @@ import pytest
 
 from jarvis import code
 from jarvis import jobs as jobs_module
-from jarvis.jobs import CODE_TOOLS, Job, Jobs, claude_command, publish_task, reply_to_task, start_task
+from jarvis.jobs import (
+    CODE_TOOLS,
+    Job,
+    Jobs,
+    claude_command,
+    error_line,
+    note_utterance,
+    publish_task,
+    reply_to_task,
+    start_task,
+)
 
 
 def run(*args, cwd=None):
@@ -207,7 +217,7 @@ def test_a_coding_job_works_in_its_own_worktree_and_offers_the_pr(tmp_path, repo
     fake = Jobs()
     job = run_job(monkeypatch, tmp_path, fake, Job(1, "code", "commit", repo=repo))
     assert job.status == "done" and job.commits == 1
-    assert job.result == "Corrigi o README. Quer que eu abra o PR?"
+    assert job.result == "Corrigi o README. Quer que eu abra o PR?" and job.asked > 0
     assert (job.pr_title, job.pr_body) == ("Fix: correct the README typo", "Fixed the typo.")
     assert job.folder.parent == repo / ".claude/worktrees"
     assert run("git", "branch", "--show-current", cwd=job.folder) == "fix/readme-typo"
@@ -254,6 +264,7 @@ def test_publish_task_picks_the_latest_coding_job_with_commits(monkeypatch, tmp_
     monkeypatch.setattr(jobs_module, "jobs", fake)
     published = []
     monkeypatch.setattr(code, "publish", lambda *args: published.append(args) or "https://github.com/v/j/pull/9")
+    fake.all[1].approved = time.time()
     assert publish_task({}) == "Published task 1: https://github.com/v/j/pull/9"
     assert published == [(tmp_path, "main", "Fix: a", "")] and fake.all[1].pr_url.endswith("/9")
     assert "didn't commit" in publish_task({"task_id": 2})
@@ -273,7 +284,9 @@ def test_publish_task_refuses_running_jobs_and_reports_failures(monkeypatch, tmp
 
     monkeypatch.setattr(code, "publish", rejected)
     assert "still running" in publish_task({"task_id": 1})
+    fake.all[2].approved = time.time()
     assert publish_task({"task_id": 2}) == "Couldn't publish task 2: fatal: unable to access"
+    fake.all[2].approved = time.time()  # the failed push spent the yes; he says "abre o PR" again
     assert publish_task({}) == "Couldn't publish task 2: fatal: unable to access"  # the latest one with commits
 
 
@@ -293,3 +306,67 @@ def test_follow_ups_continue_in_the_same_worktree(monkeypatch, tmp_path):
     assert started == [("s1", {"folder": tmp_path, "repo": tmp_path, "base": "main", "start": "abc"})]
     fake.all[1].folder = None
     assert "worktree is gone" in reply_to_task({"task_id": 1, "message": "mais"})
+
+
+# --- timeouts and the spoken yes ---------------------------------------------------------------------------------------
+
+
+def test_error_line_decodes_timeout_stderr_and_falls_back():
+    assert error_line(subprocess.TimeoutExpired("git", 30, stderr=b"fatal: remote hung up\n")) == "fatal: remote hung up"
+    assert error_line(subprocess.CalledProcessError(1, "git", "", "a\nb")) == "b"
+    assert error_line(OSError("disk full")) == "disk full"
+    assert error_line(subprocess.TimeoutExpired("git", 30)) == "Command 'git' timed out after 30 seconds"
+
+
+def test_remove_if_empty_survives_a_git_timeout(repo, monkeypatch):
+    worktree, _, start = code.create_worktree(repo, "t1")
+
+    def timed_out(*args, **kwargs):
+        raise subprocess.TimeoutExpired("git", 30)
+
+    monkeypatch.setattr(code, "git", timed_out)
+    assert not code.remove_if_empty(repo, worktree, start)
+    assert worktree.exists()  # it couldn't be checked, so it stays for him to look at
+
+
+def test_a_worktree_timeout_fails_the_job_instead_of_hanging_it(tmp_path, repo, monkeypatch):
+    def timed_out(*args, **kwargs):
+        raise subprocess.TimeoutExpired("git", 120, stderr=b"fatal: remote hung up\n")
+
+    monkeypatch.setattr(code, "create_worktree", timed_out)
+    job = run_job(monkeypatch, tmp_path, Jobs(), Job(1, "code", "commit", repo=repo))
+    assert job.status == "failed" and "remote hung up" in job.result
+
+
+def test_publish_task_refuses_without_a_fresh_spoken_yes(monkeypatch, tmp_path):
+    fake = Jobs()
+    fake.all = {1: Job(1, "code", "a", status="done", commits=1, folder=tmp_path, base="main")}
+    monkeypatch.setattr(jobs_module, "jobs", fake)
+    monkeypatch.setattr(code, "publish", lambda *args: "https://github.com/v/j/pull/9")
+    assert "isn't approved" in publish_task({"task_id": 1})
+    fake.all[1].approved = time.time() - 3600  # a yes older than the window doesn't count either
+    assert "isn't approved" in publish_task({})
+    fake.all[1].approved = time.time()
+    assert publish_task({}) == "Published task 1: https://github.com/v/j/pull/9"
+    assert fake.all[1].approved == 0  # one yes publishes once; a retry needs a fresh yes
+    assert "isn't approved" in publish_task({})
+
+
+def test_note_utterance_arms_the_latest_coding_job(monkeypatch):
+    fake = Jobs()
+    fake.all = {
+        1: Job(1, "code", "a", status="done", commits=1),
+        2: Job(2, "code", "b", status="done", commits=2, asked=time.time()),
+        3: Job(3, "computer", "c", status="done", commits=5),
+    }
+    monkeypatch.setattr(jobs_module, "jobs", fake)
+    ask = "Tarefa 2 terminou, os testes passam. Quer que eu abra o PR?"
+    assert note_utterance("sim", ask)
+    assert fake.all[2].approved > 0 and fake.all[1].approved == 0 and fake.all[3].approved == 0
+    fake.all[2].approved = 0
+    assert note_utterance("abre o pr", "")  # later, with no ask just spoken, even in a new conversation
+    assert fake.all[2].approved > 0
+    assert note_utterance("abre o pr da tarefa 1", "")
+    assert fake.all[1].approved > 0
+    for text, reply in (("não", ask), ("deixa pra depois", ask), ("sim", "Fechado."), ("quem é você?", ask)):
+        assert not note_utterance(text, reply)

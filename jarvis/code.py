@@ -90,7 +90,7 @@ def remove_if_empty(repo: Path, worktree: Path, start: str) -> bool:
         branch = git(worktree, "branch", "--show-current")
         git(repo, "worktree", "remove", str(worktree))
         git(repo, "branch", "-D", branch)
-    except (subprocess.CalledProcessError, OSError):
+    except (subprocess.SubprocessError, OSError):
         return False
     return True
 

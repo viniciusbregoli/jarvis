@@ -45,8 +45,10 @@ READ_ONLY_TOOLS = [
 ]  # fmt: skip
 # Flags that make otherwise read-only commands write files.
 WRITE_FLAGS = ["Bash(git log --output*)", "Bash(git diff --output*)", "Bash(git show --output*)"]
-# Coding jobs also commit and run the repo's checks, all inside their worktree. No push: that's publish_task, after a
-# spoken "sim".
+# Coding jobs also commit and run the repo's checks, all inside their worktree. The allowlist keeps the agent itself
+# from pushing — that's publish_task, after a spoken "sim" — but the repo's own test and build commands run
+# repository-controlled code with Vinicius's credentials, so a malicious repo could still push from inside a job;
+# closing that for good needs a sandbox without push credentials.
 CODE_TOOLS = EDIT_TOOLS + [
     "Bash(git add *)", "Bash(git commit *)", "Bash(git branch -m *)", "Bash(git restore *)", "Bash(git rm *)",
     "Bash(git mv *)",
@@ -58,6 +60,19 @@ CODE_TOOLS = EDIT_TOOLS + [
 ]  # fmt: skip
 # Claude Code adds a co-author trailer to its commits by default; Vinicius never wants one.
 NO_ATTRIBUTION = json.dumps({"includeCoAuthoredBy": False, "attribution": {"commit": "", "pr": ""}})
+
+# publish_task pushes only after a spoken yes. note_utterance arms it from the trusted speech transcripts — what
+# Vinicius actually said, which the agent can't fabricate — never from model text, which a job's result or a fetched
+# page could steer. An approval expires, so a stray "sim" can't arm a publish forever.
+APPROVAL_TTL = 15 * 60
+YES = re.compile(
+    r"\b(sim|claro|isso|pode|manda|bora|positivo|confirmo|confirma|aprov\w+|ok|beleza|yes|yeah|yep|sure|go ahead|"
+    r"open it|push it)\b",
+    re.IGNORECASE,
+)
+NOT_YES = re.compile(r"\b(não|nao|nope|deixa|depois|later)\b", re.IGNORECASE)
+PR_WORDS = re.compile(r"\bpr\b|pull request|pê err|pê-err", re.IGNORECASE)
+TASK_WORDS = re.compile(r"\b(?:tarefa|task)\s+#?(\d+)", re.IGNORECASE)
 
 SPOKEN_ANSWER = (
     "Your final answer is spoken aloud by a voice assistant: one to three short sentences in Brazilian Portuguese, "
@@ -111,9 +126,12 @@ def claude_command(prompt: str, resume: str | None = None, kind: str = "computer
     # background and have to get the change right, so they get Sonnet. --strict-mcp-config skips starting every MCP
     # server, whose tools jobs can't call anyway.
     tools = {"edit": EDIT_TOOLS, "code": CODE_TOOLS}.get(kind, [])
+    # Code jobs don't get the web tools: a fetched page is untrusted content that could steer a job around its own
+    # allowlist, whose test and build commands already run repository-controlled code.
+    read_only = READ_ONLY_TOOLS if kind != "code" else [t for t in READ_ONLY_TOOLS if not t.startswith("Web")]
     command = [
         "claude", "-p", prompt, "--output-format", "json", "--permission-mode", "dontAsk",
-        "--allowedTools", ",".join(READ_ONLY_TOOLS + tools),
+        "--allowedTools", ",".join(read_only + tools),
         "--disallowedTools", ",".join(WRITE_FLAGS),
         "--append-system-prompt", {"edit": EDIT_PROMPT, "code": CODE_PROMPT}.get(kind, JOB_PROMPT),
         "--model", "claude-sonnet-5-5" if kind == "code" else "claude-haiku-5-5", "--strict-mcp-config",
@@ -151,6 +169,15 @@ def stop(process: subprocess.Popen):
     timer.start()
 
 
+def error_line(error: BaseException) -> str:
+    """A subprocess error's last stderr line, decoding it: TimeoutExpired keeps bytes even in text mode."""
+    stderr = getattr(error, "stderr", "") or ""
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    lines = (stderr or str(error)).strip().splitlines()
+    return lines[-1] if lines else "unknown error"
+
+
 @dataclass
 class Job:
     id: int
@@ -172,6 +199,8 @@ class Job:
     pr_title: str = ""
     pr_body: str = ""
     pr_url: str = ""
+    asked: float = 0.0  # code jobs: when its result last asked about the PR, so a following yes counts as approval
+    approved: float = 0.0  # code jobs: when note_utterance last heard the yes; publish_task refuses without a fresh one
     process: subprocess.Popen | None = field(default=None, repr=False)
 
 
@@ -201,10 +230,9 @@ class Jobs:
                         job.repo, f"{time.strftime('%Y%m%d-%H%M%S')}-{job.id}"
                     )
                 except (subprocess.SubprocessError, OSError) as error:
-                    detail = (getattr(error, "stderr", "") or str(error)).strip().splitlines()[-1:]
                     job.status, job.result, job.ended = (
                         "failed",
-                        f"Não consegui criar a worktree: {' '.join(detail)}",
+                        f"Não consegui criar a worktree: {error_line(error)}",
                         time.time(),
                     )
                     self.on_done(job)
@@ -263,6 +291,7 @@ class Jobs:
         if job.commits:
             published = any(other.pr_url for other in list(self.all.values()) if other.folder == job.folder)
             job.result += " Quer que eu atualize o PR?" if published else " Quer que eu abra o PR?"
+            job.asked = time.time()
         elif code.remove_if_empty(job.repo, job.folder, job.start):
             job.folder = None
 
@@ -408,6 +437,28 @@ def reply_to_task(params: dict) -> str:
     return f"Started task {follow_up.id}, continuing task {job.id}."
 
 
+def note_utterance(user: str, jarvis_last: str = "") -> bool:
+    """Arm publish_task for a coding job from the trusted speech transcripts: a yes right after Jarvis asked about the
+    PR, or the user naming it later ("abre o PR"), even in a new conversation. Tool results and everything the agent
+    says are model text, so they can never arm it — only what Vinicius actually said can."""
+    job = None
+    if number := TASK_WORDS.search(user):
+        found = jobs.all.get(int(number.group(1)))
+        job = found if found and found.kind == "code" and found.commits else None
+    if job is None:
+        job = max(
+            (j for j in list(jobs.all.values()) if j.kind == "code" and j.commits), key=lambda j: j.id, default=None
+        )
+    if not job:
+        return False
+    said_yes = YES.search(user) and not NOT_YES.search(user)
+    asked_lately = 0 < time.time() - job.asked < APPROVAL_TTL
+    if PR_WORDS.search(user) or (said_yes and asked_lately and PR_WORDS.search(jarvis_last)):
+        job.approved = time.time()
+        return True
+    return False
+
+
 def publish_task(params: dict) -> str:
     if task_id := params.get("task_id"):
         job = jobs.all.get(int(task_id))
@@ -421,11 +472,13 @@ def publish_task(params: dict) -> str:
         return f"Task {job.id} is still running."
     if not job.commits or not job.folder:
         return f"Task {job.id} didn't commit anything, so there's nothing to publish."
+    if time.time() - job.approved > APPROVAL_TTL:
+        return f"Task {job.id} isn't approved: publishing waits for a spoken yes to opening the PR."
+    job.approved = 0  # one yes publishes once; a failed push needs a fresh yes ("abre o PR" again)
     try:
         job.pr_url = code.publish(job.folder, job.base, job.pr_title, job.pr_body)
     except (subprocess.SubprocessError, OSError) as error:
-        detail = (getattr(error, "stderr", "") or str(error)).strip().splitlines()
-        return f"Couldn't publish task {job.id}: {detail[-1] if detail else 'unknown error'}"
+        return f"Couldn't publish task {job.id}: {error_line(error)}"
     return f"Published task {job.id}: {job.pr_url}"
 
 
@@ -516,7 +569,7 @@ SPECS = [
         "handler": publish_task,
         "description": "Push a finished code task's branch and open its pull request on GitHub (or update the one it "
         "already has). Publishing is outward: call it only after Vinicius said 'sim' to opening the PR in this "
-        "conversation, never on your own.",
+        "conversation, never on your own; it refuses unless his spoken yes was heard.",
         "parameters": task_id_param("Optional task number; omit for the latest code task"),
         "timeout": 120,
     },

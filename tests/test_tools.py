@@ -59,3 +59,13 @@ def test_greeting_follows_the_time_of_day():
     hours = {2: "Ainda acordado, senhor?", 9: "Bom dia, senhor.", 15: "Boa tarde, senhor.", 21: "Boa noite, senhor."}
     for hour, expected in hours.items():
         assert greeting(dt.datetime(2026, 10, 24, hour)) == expected
+
+
+def test_open_target_opens_existing_paths_and_rejects_missing_ones(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(tools, "run", lambda *cmd, **_: calls.append(cmd) or Result())
+    pdf = tmp_path / "roadmap.pdf"
+    pdf.write_text("x")
+    assert tools.open_target({"target": str(pdf)}) == f"Opened {pdf}"
+    assert tools.open_target({"target": str(tmp_path / "missing.pdf")}).startswith("Nothing at")
+    assert calls == [("open", str(pdf))]

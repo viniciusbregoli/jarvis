@@ -32,6 +32,10 @@ def notify(text: str):
 def announce(text: str):
     """Notification plus speech, for things that happen outside a conversation (a timer going off)."""
     notify(text)
+    speak(text)
+
+
+def speak(text: str):
     audio = ElevenLabs(api_key=api_key()).text_to_speech.convert(VOICE_ID, text=text, output_format="mp3_44100_128")
     with tempfile.NamedTemporaryFile(suffix=".mp3") as f:
         f.write(b"".join(audio))

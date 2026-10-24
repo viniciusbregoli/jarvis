@@ -15,7 +15,7 @@ from .audio import VoiceProcessingAudio, refresh_devices, wait_for_wake_word
 from .jobs import SPECS as JOB_SPECS
 from .jobs import jobs
 from .tools import SPECS as MAC_SPECS
-from .tools import announce, notify
+from .tools import speak
 
 IDLE_SECONDS = 12  # silence after Jarvis stops talking before the session closes (sessions bill per minute)
 RETRY_SECONDS = 10
@@ -62,8 +62,13 @@ def converse(client: ElevenLabs, agent_id: str, on_session):
         callback_agent_response=lambda text: print(f"jarvis: {text}"),
         callback_end_session=ended.set,
     )
+
+    def quiet() -> bool:
+        """Jarvis isn't talking and Vinicius hasn't spoken for a second: safe to slip a job result in."""
+        return not audio.pending and time.monotonic() - max(last_user, audio.last_played) > 1
+
     conversation.start_session()
-    on_session(conversation)
+    on_session((conversation, quiet))
     try:
         while not ended.wait(1):
             if not busy and time.monotonic() - max(last_user, audio.last_played) > IDLE_SECONDS:
@@ -83,7 +88,7 @@ class JarvisApp(rumps.App):
         self.talk_requested = False
         self.shown_mics: dict[str, int] = {}  # menu label -> CoreAudio device id
         self.mic_menu = rumps.MenuItem("Microphone")
-        self.conversation = None  # the live session, so finished jobs can report into it
+        self.session = None  # (conversation, quiet) while one is live, so finished jobs can report into it
         jobs.on_done = self.job_done
         self.client = ElevenLabs(api_key=api_key())  # exits here, on the main thread, when the key is missing
         self.menu = [self.status_item, rumps.MenuItem("Talk now", callback=self.talk_now), self.mic_menu]
@@ -105,20 +110,24 @@ class JarvisApp(rumps.App):
             self.shown_mics = mics
         self.show_mic()
 
-    def set_conversation(self, conversation):
-        self.conversation = conversation
+    def set_session(self, session):
+        self.session = session
 
     def job_done(self, job):
-        outcome = "terminou" if job.status == "done" else "falhou"
-        notify(f"Tarefa {job.id} {outcome}: {job.result}")
-        if conversation := self.conversation:
+        # Injected while Jarvis is mid-sentence, the update interrupts it and the answer's audio gets lost, so wait
+        # for a pause (up to 30 s).
+        deadline = time.monotonic() + 30
+        while (session := self.session) and not session[1]() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        if session := self.session:
             # A contextual update would only be read on the next turn; a message makes the agent say it now.
-            conversation.send_user_message(
+            session[0].send_user_message(
                 f"[Automatic update, not Vinicius speaking] Background task {job.id} ({job.task}) {job.status}. "
                 f"Result: {job.result}"
             )
         else:
-            announce(f"Senhor, a tarefa {job.id} {outcome}. {job.result}")
+            outcome = "terminou" if job.status == "done" else "falhou"
+            speak(f"Senhor, a tarefa {job.id} {outcome}. {job.result}")
 
     def talk_now(self, _):
         self.talk_requested = True
@@ -151,11 +160,12 @@ class JarvisApp(rumps.App):
                     continue
                 self.talk_requested = False
                 self.status = ("talking", "In conversation")
-                converse(self.client, agent_id, self.set_conversation)
+                converse(self.client, agent_id, self.set_session)
             except Exception as error:  # noqa: BLE001
                 # A dropped network or mic shouldn't kill the thread while the icon still says "running".
                 self.status = ("idle", f"Error, retrying: {error}"[:80])
                 time.sleep(RETRY_SECONDS)
 
 
-JarvisApp().run()
+if __name__ == "__main__":
+    JarvisApp().run()

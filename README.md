@@ -38,6 +38,8 @@ Ask in Portuguese or English; Jarvis always answers in Brazilian Portuguese, in 
 
 - **Edits**: "corrige o slide 4 da apresentação que eu tô apresentando" checks what's in front (Keynote, Preview, TextEdit, or the selected tab in Zen, Firefox, Chrome, Safari) and starts a Claude Code job that may write only inside that document's folder; the folder is snapshotted first, the document reloads when it's done, and "desfaz" restores the snapshot (`~/.jarvis/snapshots`)
 
+- **Code**: "corrige o typo no README do jarvis", "no cosmos, muda o timeout do cliente http pra 60 segundos" start a Claude Code job (Sonnet) in a new git worktree of that repo (`<repo>/.claude/worktrees/`), on its own branch off the latest default branch, so your checkout is never touched. The repo is found by name in `~/.t3/projects` and `~/Code` ("cosmos" finds `kinebot-cosmos`). The job follows the repo's CLAUDE.md, runs its tests, renames the branch to `fix/...` or `feat/...` and commits with conventional commits, without co-author lines, but can't push. When it's done Jarvis asks "Abro o PR?"; only a "sim" makes it push the branch and open the PR (assigned to you, with the repo's PR template filled in), and "abre o PR" later does the same. Follow-ups ("adiciona um teste também") continue in the same worktree and update the PR. A job that commits nothing removes its worktree; one with work in it stays for you to look at
+
 Other jobs only look and search (files, git, GitHub, the web) and can't change, send or delete anything; a task asking to delete files or send a message is refused before it starts. Claude Code jobs run in `dontAsk` mode with an allowlist and without your Claude settings files, so only that list applies and anything outside it is refused.
 
 ### The HAL bar

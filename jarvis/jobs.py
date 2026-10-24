@@ -1,6 +1,7 @@
 """Background jobs the voice agent hands off: Claude Code for files, code, PRs and research; Codex computer use for
 clicking around apps. Jobs read and search by default; "edit" jobs may also change files, but only inside one folder,
-which is snapshotted first so "desfaz" can put it back."""
+which is snapshotted first so "desfaz" can put it back; "code" jobs change a repo in their own worktree and commit
+there, and only publish_task pushes."""
 
 import itertools
 import json
@@ -16,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from AppKit import NSWorkspace
+
+from jarvis import code
 
 JOB_TIMEOUT = 20 * 60
 # The prompt forbids these, but the voice agent still sometimes starts a job for "apaga tudo de Downloads" or "manda
@@ -42,6 +45,19 @@ READ_ONLY_TOOLS = [
 ]  # fmt: skip
 # Flags that make otherwise read-only commands write files.
 WRITE_FLAGS = ["Bash(git log --output*)", "Bash(git diff --output*)", "Bash(git show --output*)"]
+# Coding jobs also commit and run the repo's checks, all inside their worktree. No push: that's publish_task, after a
+# spoken "sim".
+CODE_TOOLS = EDIT_TOOLS + [
+    "Bash(git add *)", "Bash(git commit *)", "Bash(git branch -m *)", "Bash(git restore *)", "Bash(git rm *)",
+    "Bash(git mv *)",
+    "Bash(uv run pytest*)", "Bash(uv run python -m pytest*)", "Bash(uv run ruff *)", "Bash(uv run mypy *)",
+    "Bash(pytest*)", "Bash(python -m pytest*)", "Bash(python3 -m pytest*)",
+    "Bash(npm ci*)", "Bash(npm test*)", "Bash(npm run *)",
+    "Bash(pnpm install --frozen-lockfile*)", "Bash(pnpm test*)", "Bash(pnpm run *)", "Bash(pnpm lint*)",
+    "Bash(cargo test*)", "Bash(cargo build*)", "Bash(go test *)", "Bash(swift build*)", "Bash(swift test*)",
+]  # fmt: skip
+# Claude Code adds a co-author trailer to its commits by default; Vinicius never wants one.
+NO_ATTRIBUTION = json.dumps({"includeCoAuthoredBy": False, "attribution": {"commit": "", "pr": ""}})
 
 SPOKEN_ANSWER = (
     "Your final answer is spoken aloud by a voice assistant: one to three short sentences in Brazilian Portuguese, "
@@ -61,23 +77,48 @@ EDIT_PROMPT = (
     "create files only inside it. Make exactly the change he asked for and nothing else; if the request is unclear "
     "(e.g. which slide), pick the most likely reading and say which one you changed. " + SPOKEN_ANSWER
 )
+CODE_PROMPT = (
+    "You are running as a background coding job for Jarvis, Vinicius's voice assistant on his Mac. Work on your own "
+    "and never ask questions. Your working directory is a fresh git worktree of one of his repositories, on its own "
+    "branch, based on the latest default branch. Read the repo's CLAUDE.md or AGENTS.md first if it has one and "
+    "follow it. Make exactly the change he asked for, kept simple and matching the surrounding code; no unrelated "
+    "cleanups. Change files only with the Edit and Write tools, never sed, heredocs or shell redirects. Bash runs "
+    "one plain command per call, and only these: git add, commit, branch -m, restore, rm, mv, status, diff, log, "
+    "and the repo's test or lint command (uv run pytest, uv run ruff, npm test, npm run <script>, pnpm run "
+    "<script>, cargo test, go test, swift test); anything else, or several commands chained in one call, is "
+    "refused. When a call is refused, do it another allowed way instead of giving up. "
+    "Write or update tests for any behavior change and run the repo's tests and linter. Before your first "
+    "commit, rename the branch with `git branch -m <type>/<short-name>` (type feat, fix or chore; short name in "
+    "kebab-case). Commit in small, focused commits with conventional commit messages in English, in the imperative "
+    "(`fix: stop the deck from skipping slides`), passing the message with -m (no heredocs, no $(...)), with no "
+    "co-author or AI attribution lines and no emojis. Never push, open a PR or change anything outside this folder: "
+    "Vinicius decides later whether to publish. If you can't finish, don't commit broken work; say what's missing. "
+    + SPOKEN_ANSWER
+    + " Say what you changed and whether the tests pass, without branch names. After the spoken part, if you "
+    "committed anything, add a line 'PR title: <Type>: <description>' (e.g. 'Fix: stop the deck from skipping "
+    "slides') and a line 'PR body:' followed by the PR description in English markdown, filling the repo's "
+    ".github/pull_request_template.md if it has one; "
+    "Jarvis uses those lines to open the PR and never reads them aloud."
+)
 DESKTOP_PROMPT = (
     "Use computer use to do this on the Mac: {task}\n\nNever send or post messages, buy, delete, or submit forms; if "
     "the task needs that, stop and explain. " + SPOKEN_ANSWER
 )
 
 
-def claude_command(prompt: str, resume: str | None = None, edit: bool = False) -> list[str]:
-    # Haiku: a file search took a median 19 s against 55 s on Sonnet, with the same answer. --strict-mcp-config skips
-    # starting every MCP server, whose tools read-only jobs can't call anyway.
+def claude_command(prompt: str, resume: str | None = None, kind: str = "computer") -> list[str]:
+    # Haiku: a file search took a median 19 s against 55 s on Sonnet, with the same answer. Coding jobs run in the
+    # background and have to get the change right, so they get Sonnet. --strict-mcp-config skips starting every MCP
+    # server, whose tools jobs can't call anyway.
+    tools = {"edit": EDIT_TOOLS, "code": CODE_TOOLS}.get(kind, [])
     command = [
         "claude", "-p", prompt, "--output-format", "json", "--permission-mode", "dontAsk",
-        "--allowedTools", ",".join(READ_ONLY_TOOLS + (EDIT_TOOLS if edit else [])),
+        "--allowedTools", ",".join(READ_ONLY_TOOLS + tools),
         "--disallowedTools", ",".join(WRITE_FLAGS),
-        "--append-system-prompt", EDIT_PROMPT if edit else JOB_PROMPT,
-        "--model", "claude-haiku-5-5", "--strict-mcp-config",
+        "--append-system-prompt", {"edit": EDIT_PROMPT, "code": CODE_PROMPT}.get(kind, JOB_PROMPT),
+        "--model", "claude-sonnet-5-5" if kind == "code" else "claude-haiku-5-5", "--strict-mcp-config",
         # No settings files: your own allow rules (ssh, sshpass, MCP tools) would otherwise apply to jobs too.
-        "--setting-sources", "",
+        "--setting-sources", "", "--settings", NO_ATTRIBUTION,
     ]  # fmt: skip
     return command + ["--resume", resume] if resume else command
 
@@ -113,16 +154,24 @@ def stop(process: subprocess.Popen):
 @dataclass
 class Job:
     id: int
-    kind: str  # "computer" (Claude Code), "edit" (Claude Code writing inside `folder`) or "desktop" (Codex)
+    kind: str  # "computer" (Claude Code), "edit" (Claude Code writing inside `folder`), "code" (Claude Code in a
+    # worktree of `repo`) or "desktop" (Codex)
     task: str
     status: str = "running"  # running, done, failed, cancelled
     result: str = ""
     session_id: str | None = None
     started: float = field(default_factory=time.time)
     ended: float | None = None
-    folder: Path | None = None  # edit jobs: the only place they may write
+    folder: Path | None = None  # edit jobs: the only place they may write; code jobs: their worktree
     snapshot: Path | None = None  # edit jobs: the folder as it was before
     on_success: object = field(default=None, repr=False)  # edit jobs: e.g. reload the document
+    repo: Path | None = None  # code jobs: the main checkout
+    base: str = ""  # code jobs: the branch the PR goes into
+    start: str = ""  # code jobs: the commit the worktree started from
+    commits: int = 0
+    pr_title: str = ""
+    pr_body: str = ""
+    pr_url: str = ""
     process: subprocess.Popen | None = field(default=None, repr=False)
 
 
@@ -145,8 +194,22 @@ class Jobs:
                 command = ["codex", "exec", "--skip-git-repo-check", "-s", "read-only", "-o", str(answer)]
                 command.append(DESKTOP_PROMPT.format(task=job.task))
             else:
-                command = claude_command(job.task, resume, edit=job.kind == "edit")
-            cwd = {"desktop": tmp, "edit": job.folder}.get(job.kind, Path.home())
+                command = claude_command(job.task, resume, kind=job.kind)
+            if job.kind == "code" and not job.folder:
+                try:
+                    job.folder, job.base, job.start = code.create_worktree(
+                        job.repo, f"{time.strftime('%Y%m%d-%H%M%S')}-{job.id}"
+                    )
+                except (subprocess.SubprocessError, OSError) as error:
+                    detail = (getattr(error, "stderr", "") or str(error)).strip().splitlines()[-1:]
+                    job.status, job.result, job.ended = (
+                        "failed",
+                        f"Não consegui criar a worktree: {' '.join(detail)}",
+                        time.time(),
+                    )
+                    self.on_done(job)
+                    return
+            cwd = {"desktop": tmp, "edit": job.folder, "code": job.folder}.get(job.kind, Path.home())
             # stdin closed: claude -p reads any inherited input as part of the prompt.
             try:
                 job.process = subprocess.Popen(
@@ -179,11 +242,29 @@ class Jobs:
                     job.result = answer.read_text().strip() if ok else "A tarefa na tela falhou."
                 else:
                     job.result, job.session_id, ok = parse_claude(stdout)
+                if job.kind == "code":
+                    self._finish_code(job)
                 job.status = "done" if ok else "failed"
                 if ok and job.on_success:
                     job.on_success()
         job.ended = time.time()
         self.on_done(job)
+
+    def _finish_code(self, job: Job):
+        job.result, job.pr_title, job.pr_body = code.split_pr(job.result)
+        if not job.pr_title:  # a follow-up that only answered keeps the PR text its first run wrote
+            earlier = [other for other in list(self.all.values()) if other.folder == job.folder and other.pr_title]
+            if earlier:
+                job.pr_title, job.pr_body = earlier[-1].pr_title, earlier[-1].pr_body
+        try:
+            job.commits = code.commits_since(job.folder, job.start)
+        except (subprocess.SubprocessError, OSError, ValueError):
+            job.commits = 0
+        if job.commits:
+            published = any(other.pr_url for other in list(self.all.values()) if other.folder == job.folder)
+            job.result += " Quer que eu atualize o PR?" if published else " Quer que eu abra o PR?"
+        elif code.remove_if_empty(job.repo, job.folder, job.start):
+            job.folder = None
 
     def cancel(self, job_id: int) -> bool:
         job = self.all.get(job_id)
@@ -249,8 +330,14 @@ def edit_folder(path: str) -> tuple[Path | None, str]:
 
 def start_task(params: dict) -> str:
     kind = params.get("kind", "computer")
-    if kind not in ("computer", "desktop", "edit"):
+    if kind not in ("computer", "desktop", "edit", "code"):
         return f"Unknown kind: {kind}"
+    if kind == "code":
+        repo, problem = code.find_repo(params.get("path", ""))
+        if not repo:
+            return problem
+        job = jobs.start("code", params["task"], repo=repo)
+        return f"Started task {job.id} in {repo.name}. Its result will arrive as an update when it finishes."
     if kind != "edit":
         if NOT_ENABLED.search(params["task"]):
             return "Not started: deleting files and sending messages aren't enabled yet. Tell Vinicius that."
@@ -307,14 +394,39 @@ def cancel_task(params: dict) -> str:
 
 def reply_to_task(params: dict) -> str:
     job = jobs.all.get(int(params["task_id"]))
-    if not job or job.kind not in ("computer", "edit") or not job.session_id:
+    if not job or job.kind not in ("computer", "edit", "code") or not job.session_id:
         return "That task can't be continued; start a new one instead."
     fields = {}
+    if job.kind == "code":
+        if not job.folder:
+            return "That task's worktree is gone (it changed nothing); start a new one instead."
+        fields = {"folder": job.folder, "repo": job.repo, "base": job.base, "start": job.start}
     if job.kind == "edit":  # same folder, fresh snapshot so undo goes back one step at a time
         fields = {"folder": job.folder, "snapshot": SNAPSHOTS / f"{int(time.time())}-{job.folder.name}"}
         shutil.copytree(job.folder, fields["snapshot"])
     follow_up = jobs.start(job.kind, params["message"], resume=job.session_id, **fields)
     return f"Started task {follow_up.id}, continuing task {job.id}."
+
+
+def publish_task(params: dict) -> str:
+    if task_id := params.get("task_id"):
+        job = jobs.all.get(int(task_id))
+    else:  # "abre o PR": the latest coding job that committed something
+        job = max(
+            (j for j in list(jobs.all.values()) if j.kind == "code" and j.commits), key=lambda j: j.id, default=None
+        )
+    if not job or job.kind != "code":
+        return "There's no coding task to publish."
+    if job.status == "running":
+        return f"Task {job.id} is still running."
+    if not job.commits or not job.folder:
+        return f"Task {job.id} didn't commit anything, so there's nothing to publish."
+    try:
+        job.pr_url = code.publish(job.folder, job.base, job.pr_title, job.pr_body)
+    except (subprocess.SubprocessError, OSError) as error:
+        detail = (getattr(error, "stderr", "") or str(error)).strip().splitlines()
+        return f"Couldn't publish task {job.id}: {detail[-1] if detail else 'unknown error'}"
+    return f"Published task {job.id}: {job.pr_url}"
 
 
 def task_id_param(description: str = "The task number") -> dict:
@@ -339,10 +451,12 @@ SPECS = [
         "handler": start_task,
         "description": "Hand a longer job to a background agent and return right away. kind=computer to look things "
         "up: files on the Mac, code, git, GitHub PRs and CI, deeper research (Claude Code, read-only). kind=edit to "
-        "change a document or project: give path (the file or folder, e.g. from front_document); the agent may only "
+        "change a document: give path (the file or folder, e.g. from front_document); the agent may only "
         "write inside that folder, which is snapshotted so undo_task can restore it; set reload=true when it's the "
-        "document on screen (a deck being presented). kind=desktop for clicking and typing inside apps (Codex "
-        "computer use); ask permission to use the screen first.",
+        "document on screen (a deck being presented). kind=code to change code in a git repository: give path (the "
+        "repo's name as he said it, e.g. jarvis or cosmos, or a path inside it); the agent works in its own worktree "
+        "and branch, runs the tests and commits, but never pushes. kind=desktop for clicking and typing inside apps "
+        "(Codex computer use); ask permission to use the screen first.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -352,10 +466,13 @@ SPECS = [
                 },
                 "kind": {
                     "type": "string",
-                    "enum": ["computer", "edit", "desktop"],
+                    "enum": ["computer", "edit", "code", "desktop"],
                     "description": "Which agent runs it",
                 },
-                "path": {"type": "string", "description": "kind=edit only: absolute path of the file or folder"},
+                "path": {
+                    "type": "string",
+                    "description": "kind=edit: absolute path of the file or folder; kind=code: the repository name or a path inside it",
+                },
                 "reload": {"type": "boolean", "description": "kind=edit only: reload the front app when done"},
             },
             "required": ["task", "kind"],
@@ -383,7 +500,8 @@ SPECS = [
     {
         "name": "reply_to_task",
         "handler": reply_to_task,
-        "description": "Continue a finished computer task with a follow-up, keeping its context (e.g. 'and open it').",
+        "description": "Continue a finished computer, edit or code task with a follow-up, keeping its context (e.g. "
+        "'and open it', 'adiciona um teste também').",
         "parameters": {
             "type": "object",
             "properties": {
@@ -392,5 +510,14 @@ SPECS = [
             },
             "required": ["task_id", "message"],
         },
+    },
+    {
+        "name": "publish_task",
+        "handler": publish_task,
+        "description": "Push a finished code task's branch and open its pull request on GitHub (or update the one it "
+        "already has). Publishing is outward: call it only after Vinicius said 'sim' to opening the PR in this "
+        "conversation, never on your own.",
+        "parameters": task_id_param("Optional task number; omit for the latest code task"),
+        "timeout": 120,
     },
 ]

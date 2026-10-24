@@ -11,7 +11,7 @@ def test_file_urls_become_paths():
 
 
 def test_edit_commands_may_write_only_in_the_job_folder():
-    command = claude_command("fix slide 4", edit=True)
+    command = claude_command("fix slide 4", kind="edit")
     allowed = command[command.index("--allowedTools") + 1].split(",")
     assert "Edit(./**)" in allowed and "Write(./**)" in allowed
     assert "Edit(./**)" not in claude_command("look")[claude_command("look").index("--allowedTools") + 1]

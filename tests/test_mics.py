@@ -1,22 +1,14 @@
-from jarvis import audio
-
-DEVICES = [
-    {"name": "MacBook Air Speakers", "max_input_channels": 0},
-    {"name": "External Microphone", "max_input_channels": 1},
-    {"name": "MacBook Air Microphone", "max_input_channels": 1},
-]
+from jarvis import coreaudio
 
 
-def test_lists_only_inputs(monkeypatch):
-    monkeypatch.setattr(audio.sd, "query_devices", lambda: DEVICES)
-    assert audio.input_mics() == ["External Microphone", "MacBook Air Microphone"]
+def test_labeled_numbers_repeated_names():
+    pairs = [(89, "MacBook Air Microphone"), (101, "USB Headset"), (102, "USB Headset")]
+    assert coreaudio.labeled(pairs) == {"MacBook Air Microphone": 89, "USB Headset": 101, "USB Headset (2)": 102}
 
 
-def test_coreaudio_find_matches_exact_names(monkeypatch):
-    from jarvis import coreaudio
-
-    names = {89: "MacBook Air Microphone", 68: "Microsoft Teams Audio"}
+def test_inputs_leave_out_output_only_devices(monkeypatch):
+    names = {89: "MacBook Air Microphone", 82: "MacBook Air Speakers", 101: "USB Headset", 102: "USB Headset"}
     monkeypatch.setattr(coreaudio, "devices", lambda: list(names))
     monkeypatch.setattr(coreaudio, "name", names.get)
-    assert coreaudio.find("Microsoft Teams Audio") == 68
-    assert coreaudio.find("Unplugged Headset") is None
+    monkeypatch.setattr(coreaudio, "has_input", lambda device: device in (89, 102))
+    assert coreaudio.inputs() == {"MacBook Air Microphone": 89, "USB Headset": 102}
